@@ -1,0 +1,11 @@
+{
+    "schema_version": 2,
+    "commit": "5bafe84e8934e99e3c716523de340b3bd961b140",
+    "indexed_at": "2026-11-24T04:07:23Z",
+    "project": "go-grafana-auth-service",
+    "nodes": 151,
+    "edges": 559,
+    "original_size": 2686976,
+    "compressed_size": 150435,
+    "compression_level": 9
+}

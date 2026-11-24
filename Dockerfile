@@ -1,15 +1,21 @@
-FROM golang:1.25-alpine AS builder
+FROM golang:1.27-alpine AS builder
 WORKDIR /app
 ENV CGO_ENABLED=0 \
     GOOS=linux \
     GOARCH=amd64
 RUN apk add --no-cache git
-COPY go.mod go.sum ./
+COPY go.mod go.sum* ./
 RUN go mod download
 COPY . .
-RUN go build -ldflags="-s -w" -o main main.go
+RUN go mod tidy
+RUN go build -ldflags="-s -w" -o main ./cmd/server
 
-FROM alpine:3.22 AS runner
+# Test stage
+FROM builder AS tester
+RUN go test -v -coverprofile=coverage.out ./...
+RUN go tool cover -func=coverage.out
+
+FROM alpine:3.23 AS runner
 RUN apk add --no-cache git ca-certificates tzdata && \
     adduser -D -u 10001 appuser
 WORKDIR /app
