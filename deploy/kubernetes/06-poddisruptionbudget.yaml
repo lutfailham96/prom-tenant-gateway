@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: prom-tenant-gateway-pdb
+  namespace: monitoring
+  labels:
+    app: prom-tenant-gateway
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: prom-tenant-gateway

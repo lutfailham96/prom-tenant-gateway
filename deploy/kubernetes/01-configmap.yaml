@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prom-tenant-gateway-config
+  namespace: monitoring
+  labels:
+    app: prom-tenant-gateway
+    app.kubernetes.io/managed-by: kustomize
+data:
+  PORT: "8080"
+  RATE_LIMIT_MAX: "100"
+  RATE_LIMIT_WINDOW: "10s"
+  LOG_LEVEL: "info"
+  LOG_FORMAT: "json"

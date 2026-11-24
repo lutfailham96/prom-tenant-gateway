@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monitoring
+
+resources:
+- 00-namespace.yaml
+- 01-configmap.yaml
+- 02-secret.yaml
+- 03-deployment.yaml
+- 04-service.yaml
+- 05-hpa.yaml
+- 06-poddisruptionbudget.yaml
+- 07-rbac.yaml
+
+commonLabels:
+  app: prom-tenant-gateway
+  app.kubernetes.io/name: prom-tenant-gateway
+  app.kubernetes.io/instance: prom-tenant-gateway
+  app.kubernetes.io/managed-by: kustomize
+  app.kubernetes.io/component: auth-gateway
+
+images:
+- name: lutfailham/prom-tenant-gateway
+  newTag: "1.0.0"
