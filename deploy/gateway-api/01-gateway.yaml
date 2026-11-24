@@ -1,0 +1,34 @@
+# Gateway - Traefik Gateway with HTTP and HTTPS listeners
+# TLS termination handled by Gateway, cert-manager creates/renews cert
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: traefik-gateway
+  namespace: mimir
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-dns-prod
+spec:
+  gatewayClassName: traefik
+  listeners:
+  # HTTPS listener - terminates TLS, routes to HTTPRoute with sectionName: https
+  - name: https
+    hostname: "metrics.obv.cloudstream.tech"
+    port: 443
+    protocol: HTTPS
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - kind: Secret
+        name: metrics-obv-cloudstream-tech-dns-tls
+        namespace: mimir
+    allowedRoutes:
+      namespaces:
+        from: Same
+  # HTTP listener - redirects to HTTPS via Middleware (see 03-middleware-redirect.yaml)
+  - name: http
+    hostname: "metrics.obv.cloudstream.tech"
+    port: 80
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: Same

@@ -1,0 +1,17 @@
+# Middleware: ForwardAuth - Replaces nginx.ingress.kubernetes.io/auth-url
+# Validates requests against go-grafana-auth-service before forwarding
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: go-grafana-auth-middleware
+  namespace: mimir
+spec:
+  forwardAuth:
+    address: http://go-grafana-auth-service-svc.mimir.svc.cluster.local:80/validate-token
+    authResponseHeaders:
+      - "X-Scope-OrgID"
+    authRequestHeaders:
+      - "Authorization"
+      - "X-Original-URI"
+    tls:
+      insecureSkipVerify: true

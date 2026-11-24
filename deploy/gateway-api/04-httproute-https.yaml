@@ -1,0 +1,32 @@
+# HTTPRoute for HTTPS traffic - Replaces Ingress rules
+# Routes /api/v1/push to mimir-distributed-distributor-headless with ForwardAuth
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: mimir-httproute
+  namespace: mimir
+spec:
+  hostnames:
+  - "metrics.obv.cloudstream.tech"
+  parentRefs:
+  - name: traefik-gateway
+    namespace: mimir
+    sectionName: https
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /api/v1/push
+    filters:
+    # Apply ForwardAuth middleware via ExtensionRef
+    - type: ExtensionRef
+      extensionRef:
+        group: traefik.io
+        kind: Middleware
+        name: go-grafana-auth-middleware
+        namespace: mimir
+    backendRefs:
+    - name: mimir-distributed-distributor-headless
+      port: 8080
+      namespace: mimir
+      weight: 1
