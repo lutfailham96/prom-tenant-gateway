@@ -1,0 +1,40 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-dns-prod
+    nginx.ingress.kubernetes.io/auth-response-headers: X-Scope-OrgID
+    nginx.ingress.kubernetes.io/auth-snippet: |
+      proxy_set_header Authorization $http_authorization;
+      proxy_set_header X-Original-URI $request_uri;
+    nginx.ingress.kubernetes.io/auth-url: http://prom-tenant-gateway-svc.monitoring.svc.cluster.local:80/validate-token
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header X-Scope-OrgID $upstream_http_x_scope_orgid;
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  name: mimir-ingress-internal
+  namespace: mimir
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: metrics.internal.obv.cloudstream.tech
+    http:
+      paths:
+      - backend:
+          service:
+            name: mimir-distributed-distributor-headless
+            port:
+              number: 8080
+        path: /api/v1/push
+        pathType: Prefix
+      - backend:
+          service:
+            name: mimir-distributed-query-frontend
+            port:
+              number: 8080
+        path: /prometheus
+        pathType: Prefix
+  tls:
+  - hosts:
+    - metrics.internal.obv.cloudstream.tech
+    secretName: metrics-internal-obv-cloudstream-tech-dns-tls
