@@ -12,12 +12,12 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/lutfailham96/go-grafana-auth-service/internal/auth"
-	"github.com/lutfailham96/go-grafana-auth-service/internal/config"
-	"github.com/lutfailham96/go-grafana-auth-service/internal/handler"
-	"github.com/lutfailham96/go-grafana-auth-service/internal/logger"
-	"github.com/lutfailham96/go-grafana-auth-service/internal/metrics"
-	"github.com/lutfailham96/go-grafana-auth-service/internal/middleware"
+	"github.com/lutfailham96/prom-tenant-gateway/internal/auth"
+	"github.com/lutfailham96/prom-tenant-gateway/internal/config"
+	"github.com/lutfailham96/prom-tenant-gateway/internal/handler"
+	"github.com/lutfailham96/prom-tenant-gateway/internal/logger"
+	"github.com/lutfailham96/prom-tenant-gateway/internal/metrics"
+	"github.com/lutfailham96/prom-tenant-gateway/internal/middleware"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

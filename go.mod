@@ -1,4 +1,4 @@
-module github.com/lutfailham96/go-grafana-auth-service
+module github.com/lutfailham96/prom-tenant-gateway
 
 go 1.27
 

@@ -1,12 +1,12 @@
 version: '3.8'
 
 services:
-  grafana-auth-service:
+  prom-tenant-gateway:
     build:
       context: .
       dockerfile: Dockerfile
       target: runner
-    container_name: grafana-auth-service-test
+    container_name: prom-tenant-gateway-test
     environment:
       - PORT=8080
       - TENANT_A_TOKEN=test-token-a

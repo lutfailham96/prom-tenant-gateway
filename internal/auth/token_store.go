@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/lutfailham96/go-grafana-auth-service/internal/logger"
+	"github.com/lutfailham96/prom-tenant-gateway/internal/logger"
 )
 
 type TokenStore struct {

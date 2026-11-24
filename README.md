@@ -1,4 +1,4 @@
-# go-grafana-auth-service
+# prom-tenant-gateway
 
 Lightweight authentication service for Grafana/Mimir multi-tenant environments. Validates Bearer tokens and injects `X-Scope-OrgID` header for downstream services.
 
@@ -38,7 +38,7 @@ RATE_LIMIT_WINDOW=10s \
 
 ```bash
 # Build
-docker build -t go-grafana-auth-service .
+docker build -t prom-tenant-gateway .
 
 # Run
 docker run -d \
@@ -47,7 +47,7 @@ docker run -d \
   -e TENANT_B_TOKEN=token-b \
   -e RATE_LIMIT_MAX=100 \
   -e RATE_LIMIT_WINDOW=10s \
-  go-grafana-auth-service
+  prom-tenant-gateway
 ```
 
 ### Docker Compose (E2E Test)
@@ -127,7 +127,7 @@ kubectl apply -k deploy/gateway-api/
 
 Components:
 - `Gateway` — HTTP + HTTPS listeners with TLS termination (cert-manager)
-- `Middleware` (ForwardAuth) — Calls `/validate-token` on go-grafana-auth-service
+- `Middleware` (ForwardAuth) — Calls `/validate-token` on prom-tenant-gateway
 - `Middleware` (RedirectScheme) — HTTP → HTTPS redirect
 - `HTTPRoute` (HTTPS) — Routes `/api/v1/push` with auth
 - `HTTPRoute` (HTTP) — Redirects to HTTPS
@@ -191,7 +191,7 @@ go_grafana_auth_tokens_configured           # Number of valid tokens
 go build -ldflags="-s -w" -o bin/server ./cmd/server
 
 # Docker multi-stage (production)
-docker build -t go-grafana-auth-service .
+docker build -t prom-tenant-gateway .
 ```
 
 ## License

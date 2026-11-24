@@ -9,16 +9,16 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/monitor"
 	"github.com/gofiber/fiber/v2/middleware/recover"
-	"github.com/lutfailham96/go-grafana-auth-service/internal/auth"
-	"github.com/lutfailham96/go-grafana-auth-service/internal/config"
-	"github.com/lutfailham96/go-grafana-auth-service/internal/handler"
-	"github.com/lutfailham96/go-grafana-auth-service/internal/logger"
-	"github.com/lutfailham96/go-grafana-auth-service/internal/metrics"
-	"github.com/lutfailham96/go-grafana-auth-service/internal/middleware"
+	"github.com/lutfailham96/prom-tenant-gateway/internal/auth"
+	"github.com/lutfailham96/prom-tenant-gateway/internal/config"
+	"github.com/lutfailham96/prom-tenant-gateway/internal/handler"
+	"github.com/lutfailham96/prom-tenant-gateway/internal/logger"
+	"github.com/lutfailham96/prom-tenant-gateway/internal/metrics"
+	"github.com/lutfailham96/prom-tenant-gateway/internal/middleware"
 )
 
 const (
-	serviceName = "go-grafana-auth-service"
+	serviceName = "prom-tenant-gateway"
 	version     = "1.0.0"
 )
 

@@ -1,4 +1,4 @@
-# Gateway API Manifests for go-grafana-auth-service
+# Gateway API Manifests for prom-tenant-gateway
 
 Native Kubernetes Gateway API manifests using Traefik as the Gateway controller.
 
@@ -21,7 +21,7 @@ deploy/gateway-api/
 1. **Traefik v3.0+** installed as Gateway controller
 2. **Gateway API CRDs** installed (`gateway.networking.k8s.io/*`)
 3. **cert-manager** with `letsencrypt-dns-prod` ClusterIssuer
-4. **go-grafana-auth-service** deployed in `mimir` namespace
+4. **prom-tenant-gateway** deployed in `mimir` namespace
 5. **mimir-distributed-distributor-headless** service in `mimir` namespace
 
 ## Deploy

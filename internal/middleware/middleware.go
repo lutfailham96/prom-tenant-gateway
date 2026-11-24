@@ -5,8 +5,8 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/limiter"
-	"github.com/lutfailham96/go-grafana-auth-service/internal/logger"
-	"github.com/lutfailham96/go-grafana-auth-service/internal/metrics"
+	"github.com/lutfailham96/prom-tenant-gateway/internal/logger"
+	"github.com/lutfailham96/prom-tenant-gateway/internal/metrics"
 )
 
 func RequestLogger(log *logger.Logger) fiber.Handler {

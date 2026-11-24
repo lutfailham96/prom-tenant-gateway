@@ -23,7 +23,7 @@ spec:
       extensionRef:
         group: traefik.io
         kind: Middleware
-        name: go-grafana-auth-middleware
+        name: prom-tenant-gateway-middleware
         namespace: mimir
     backendRefs:
     - name: mimir-distributed-distributor-headless
