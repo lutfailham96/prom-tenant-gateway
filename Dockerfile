@@ -3,7 +3,6 @@ WORKDIR /app
 ENV CGO_ENABLED=0 \
     GOOS=linux \
     GOARCH=amd64
-RUN apk add --no-cache git
 COPY go.mod go.sum* ./
 RUN go mod download
 COPY . .
@@ -16,7 +15,7 @@ RUN go test -v -coverprofile=coverage.out ./...
 RUN go tool cover -func=coverage.out
 
 FROM alpine:3.23 AS runner
-RUN apk add --no-cache git ca-certificates tzdata && \
+RUN apk add --no-cache ca-certificates tzdata && \
     adduser -D -u 10001 appuser
 WORKDIR /app
 COPY --from=builder /app/main .

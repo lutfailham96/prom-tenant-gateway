@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  grafana-auth-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: grafana-auth-service-test
+    environment:
+      - PORT=8080
+      - TENANT_A_TOKEN=test-token-a
+      - TENANT_B_TOKEN=test-token-b
+      - RATE_LIMIT_MAX=100
+      - RATE_LIMIT_WINDOW=10s
+    ports:
+      - "8080:8080"
+    networks:
+      - test-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+networks:
+  test-network:
+    driver: bridge
