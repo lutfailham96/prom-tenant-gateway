@@ -152,7 +152,9 @@ See `deploy/ingress/` for old nginx Ingress manifests.
 
 ```
 .
-├── cmd/server/main.go          # Entry point
+├── cmd/server/
+│   ├── main.go                 # Entry point: config, token loading, signals
+│   └── app.go                  # newApp(): Fiber config + routes (tested in app_test.go)
 ├── internal/
 │   ├── auth/token_store.go     # Token storage & validation
 │   ├── config/config.go        # Configuration
@@ -161,29 +163,41 @@ See `deploy/ingress/` for old nginx Ingress manifests.
 │   ├── metrics/metrics.go      # Prometheus metrics
 │   └── middleware/middleware.go # Rate limiting, request logging
 ├── deploy/
+│   ├── kubernetes/             # Deployment, Service, HPA, PDB, ...
 │   └── gateway-api/            # Kubernetes Gateway API manifests
 ├── docker-compose.test.yml     # E2E test compose
 ├── Dockerfile                  # Multi-stage build
-├── go.mod / go.sum             # Dependencies
-└── main_test.go                # Comprehensive tests
+└── go.mod / go.sum             # Dependencies
 ```
+
+Unit tests live next to the code they test (`*_test.go` in each package).
 
 ## Testing
 
 ```bash
-# Unit tests
-go test -v ./...
+# Unit tests (same flags as CI)
+go test -race -count=1 ./...
 
 # With coverage
-go test -coverprofile=coverage.out ./...
+go test -covermode=atomic -coverprofile=coverage.out ./...
 go tool cover -func=coverage.out
+
+# Lint and vulnerability scan (as in CI)
+golangci-lint run ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
 
 # E2E via docker-dind
 source /opt/data/profiles/devops/credentials/env/docker-dind.env
-docker compose -f docker-compose.test.yml up --build -d
-# Run curl tests against localhost:8080
-docker compose -f docker-compose.test.yml down
+docker compose -f docker-compose.test.yml up --build -d --wait
+# Ports are internal to dind: probe from a container on the test network
+docker run --rm --network prom-tenant-gateway_test-network alpine:3.23 sh -c \
+  'apk add --no-cache curl >/dev/null && curl -fsS http://prom-tenant-gateway:8080/healthz'
+docker compose -f docker-compose.test.yml down -v
 ```
+
+CI (`.github/workflows/docker-build-push.yaml`) runs `gofmt`, `go mod tidy -diff`,
+`go vet`, `go test -race` with coverage, `govulncheck`, and `golangci-lint`; the
+image is only built and pushed when both the test and lint jobs pass.
 
 ## Metrics (Prometheus)
 

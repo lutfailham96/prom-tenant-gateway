@@ -15,23 +15,26 @@ kubectl apply -k deploy/kubernetes
 kubectl -n mimir get all -l app=prom-tenant-gateway
 ```
 
-## Required: Update Secrets
+## Required: Create the Token Secret
 
-**Before applying, replace placeholder tokens in `02-secret.yaml`:**
-
-```yaml
-stringData:
-  TENANT_PROD_TOKEN: "your-actual-prod-token"
-  TENANT_STAGING_TOKEN: "your-actual-staging-token"
-```
-
-Or use Kustomize secretGenerator (recommended for CI/CD):
+The token Secret is **not** part of the kustomization, so `kubectl apply -k`
+never overwrites real tokens. Create it once (and update it the same way):
 
 ```bash
-# Generate secret with actual values
-kustomize build deploy/kubernetes --enable-alpha-plugins \
-  | kubectl apply -f -
+# tokens.env is gitignored; one TENANT_<ID>_TOKEN=<token> per line
+cat > tokens.env <<EOT
+TENANT_PROD_TOKEN=$(openssl rand -hex 32)
+TENANT_STAGING_TOKEN=$(openssl rand -hex 32)
+EOT
+
+kubectl -n mimir create secret generic prom-tenant-gateway-tokens \
+  --from-env-file=tokens.env --dry-run=client -o yaml | kubectl apply -f -
 ```
+
+The gateway refuses to start with `CHANGE_ME*` placeholder tokens and logs a
+warning for tokens shorter than 32 characters. For GitOps, manage the Secret
+with External Secrets or Sealed Secrets instead. After changing tokens, restart
+the pods: `kubectl -n mimir rollout restart deployment/prom-tenant-gateway`.
 
 ## Components
 
@@ -39,7 +42,7 @@ kustomize build deploy/kubernetes --enable-alpha-plugins \
 |------|-------------|
 | `00-namespace.yaml` | `mimir` namespace — **not** in kustomization (owned by Mimir); apply manually only if missing |
 | `01-configmap.yaml` | App config (rate limits, log level, etc.) |
-| `02-secret.yaml` | **Tokens** - MUST UPDATE BEFORE APPLY |
+| `02-secret.example.yaml` | Token Secret example — **not** in kustomization; create the Secret out of band (see above) |
 | `03-deployment.yaml` | Probes, resources, security, preStop drain, `GOMEMLIMIT` (replicas managed by HPA) |
 | `04-service.yaml` | ClusterIP service (port 80 → 8080) |
 | `05-hpa.yaml` | HPA: CPU 70%, 3-10 replicas |

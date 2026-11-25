@@ -8,7 +8,8 @@ namespace: mimir
 # delete the whole namespace, including Mimir itself.
 resources:
 - 01-configmap.yaml
-- 02-secret.yaml
+# The token Secret (prom-tenant-gateway-tokens) is managed out of band so that
+# `kubectl apply -k` never overwrites real tokens. See 02-secret.example.yaml.
 - 03-deployment.yaml
 - 04-service.yaml
 - 05-hpa.yaml

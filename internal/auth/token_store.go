@@ -16,6 +16,14 @@ const (
 
 	// maxTenantIDLength mirrors Mimir's tenant ID length limit.
 	maxTenantIDLength = 150
+
+	// placeholderPrefix marks the example values shipped in
+	// deploy/kubernetes/02-secret.example.yaml; they must never be accepted.
+	placeholderPrefix = "CHANGE_ME"
+
+	// MinRecommendedTokenLength is the length below which a token is
+	// accepted but logged as weak.
+	MinRecommendedTokenLength = 32
 )
 
 type TokenStore struct {
@@ -63,6 +71,9 @@ func (s *TokenStore) Add(token, tenantID string) error {
 	if token == "" {
 		return fmt.Errorf("empty token for tenant %q", tenantID)
 	}
+	if len(token) >= len(placeholderPrefix) && strings.EqualFold(token[:len(placeholderPrefix)], placeholderPrefix) {
+		return fmt.Errorf("tenant %q uses a placeholder token (%s...); set a real secret", tenantID, placeholderPrefix)
+	}
 	if err := ValidateTenantID(tenantID); err != nil {
 		return err
 	}
@@ -93,6 +104,7 @@ func (s *TokenStore) LoadFromEnv() error {
 					errs = append(errs, fmt.Errorf("VALID_TOKENS_JSON: %w", err))
 					continue
 				}
+				s.warnIfWeak(token, tenant, "VALID_TOKENS_JSON")
 				loaded++
 			}
 			s.logger.Info("Loaded tokens from VALID_TOKENS_JSON (legacy)", map[string]interface{}{
@@ -111,6 +123,7 @@ func (s *TokenStore) LoadFromEnv() error {
 			errs = append(errs, fmt.Errorf("%s: %w", key, err))
 			continue
 		}
+		s.warnIfWeak(value, tenantID, key)
 		s.logger.Info("Loaded token for tenant", map[string]interface{}{
 			"tenant_id": tenantID,
 			"source":    key,
@@ -121,6 +134,19 @@ func (s *TokenStore) LoadFromEnv() error {
 		"count": len(s.tokens),
 	})
 	return errors.Join(errs...)
+}
+
+// warnIfWeak logs (without the token value) when a token is shorter than
+// MinRecommendedTokenLength.
+func (s *TokenStore) warnIfWeak(token, tenantID, source string) {
+	if n := len(strings.TrimSpace(token)); n < MinRecommendedTokenLength {
+		s.logger.Warn("Token shorter than recommended length", map[string]interface{}{
+			"tenant_id":  tenantID,
+			"source":     source,
+			"length":     n,
+			"min_length": MinRecommendedTokenLength,
+		})
+	}
 }
 
 // isTenantTokenEnv reports whether key has the form TENANT_<ID>_TOKEN with a
