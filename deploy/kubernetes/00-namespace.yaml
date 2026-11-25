@@ -1,3 +1,6 @@
+# Not part of kustomization.yaml: the mimir namespace belongs to the Mimir
+# installation. Apply manually only if the namespace does not exist yet:
+#   kubectl apply -f deploy/kubernetes/00-namespace.yaml
 apiVersion: v1
 kind: Namespace
 metadata:

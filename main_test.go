@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -67,7 +70,7 @@ func TestLoadTokensFromEnv_newPattern(t *testing.T) {
 
 	log := logger.New("test-service", "1.0.0")
 	tokenStore := auth.NewTokenStore(log)
-	tokenStore.LoadFromEnv()
+	require.NoError(t, tokenStore.LoadFromEnv())
 
 	assert.Equal(t, 3, tokenStore.Count())
 	assert.Equal(t, "a", tokenStore.Tokens()["token-a-123"])
@@ -82,7 +85,7 @@ func TestLoadTokensFromEnv_legacyPattern(t *testing.T) {
 
 	log := logger.New("test-service", "1.0.0")
 	tokenStore := auth.NewTokenStore(log)
-	tokenStore.LoadFromEnv()
+	require.NoError(t, tokenStore.LoadFromEnv())
 
 	assert.Equal(t, 2, tokenStore.Count())
 	assert.Equal(t, "tenant-legacy", tokenStore.Tokens()["legacy-token-1"])
@@ -100,7 +103,7 @@ func TestLoadTokensFromEnv_combinedPatterns(t *testing.T) {
 
 	log := logger.New("test-service", "1.0.0")
 	tokenStore := auth.NewTokenStore(log)
-	tokenStore.LoadFromEnv()
+	require.NoError(t, tokenStore.LoadFromEnv())
 
 	assert.Equal(t, 2, tokenStore.Count())
 	assert.Equal(t, "a", tokenStore.Tokens()["new-token-a"])
@@ -114,7 +117,7 @@ func TestLoadTokensFromEnv_empty(t *testing.T) {
 
 	log := logger.New("test-service", "1.0.0")
 	tokenStore := auth.NewTokenStore(log)
-	tokenStore.LoadFromEnv()
+	require.NoError(t, tokenStore.LoadFromEnv())
 
 	assert.Equal(t, 0, tokenStore.Count())
 }
@@ -124,7 +127,7 @@ func TestValidateTokenHandler_validToken(t *testing.T) {
 	log := logger.New("test-service", "1.0.0")
 	m := metrics.New()
 	tokenStore := auth.NewTokenStore(log)
-	tokenStore.Tokens()["test-token"] = "test-tenant"
+	require.NoError(t, tokenStore.Add("test-token", "test-tenant"))
 
 	h := handler.New(tokenStore, log, m)
 
@@ -148,7 +151,7 @@ func TestValidateTokenHandler_invalidToken(t *testing.T) {
 	log := logger.New("test-service", "1.0.0")
 	m := metrics.New()
 	tokenStore := auth.NewTokenStore(log)
-	tokenStore.Tokens()["valid-token"] = "tenant-1"
+	require.NoError(t, tokenStore.Add("valid-token", "tenant-1"))
 
 	h := handler.New(tokenStore, log, m)
 
@@ -254,8 +257,8 @@ func TestMetricsHandler(t *testing.T) {
 	log := logger.New("test-service", "1.0.0")
 	m := metrics.New()
 	tokenStore := auth.NewTokenStore(log)
-	tokenStore.Tokens()["token-1"] = "tenant-1"
-	tokenStore.Tokens()["token-2"] = "tenant-2"
+	require.NoError(t, tokenStore.Add("token-1", "tenant-1"))
+	require.NoError(t, tokenStore.Add("token-2", "tenant-2"))
 
 	h := handler.New(tokenStore, log, m)
 
@@ -283,12 +286,12 @@ func TestMetricsHandler(t *testing.T) {
 	assert.Contains(t, output, "go_grafana_auth_tokens_configured 2")
 }
 
-// TestRateLimiting triggers 429 after limit
+// TestRateLimiting triggers 429 after too many failed attempts
 func TestRateLimiting(t *testing.T) {
 	log := logger.New("test-service", "1.0.0")
 	m := metrics.New()
 	tokenStore := auth.NewTokenStore(log)
-	tokenStore.Tokens()["test-token"] = "test-tenant"
+	require.NoError(t, tokenStore.Add("test-token", "test-tenant"))
 
 	cfg := config.Config{
 		RateLimitMax:    3,
@@ -304,18 +307,27 @@ func TestRateLimiting(t *testing.T) {
 	app.Use(middleware.RateLimiter(log, m, cfg.RateLimitMax, cfg.RateLimitWindow))
 	app.Get("/validate-token", h.ValidateToken)
 
-	// Make 3 requests - should succeed
-	for i := 0; i < 3; i++ {
+	// Successful requests must not count towards the limit
+	for i := 0; i < 5; i++ {
 		req := httptest.NewRequest("GET", "/validate-token", nil)
 		req.Header.Set("Authorization", "Bearer test-token")
 		resp, err := app.Test(req, -1)
 		require.NoError(t, err)
-		assert.Equal(t, http.StatusOK, resp.StatusCode, "Request %d should succeed", i+1)
+		assert.Equal(t, http.StatusOK, resp.StatusCode, "Valid request %d should succeed", i+1)
 	}
 
-	// 4th request - should be rate limited
+	// 3 failed attempts are allowed
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest("GET", "/validate-token", nil)
+		req.Header.Set("Authorization", "Bearer wrong-token")
+		resp, err := app.Test(req, -1)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode, "Failed attempt %d should be 401", i+1)
+	}
+
+	// 4th failed attempt - should be rate limited
 	req := httptest.NewRequest("GET", "/validate-token", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Authorization", "Bearer wrong-token")
 	resp, err := app.Test(req, -1)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
@@ -330,7 +342,7 @@ func TestGracefulShutdown(t *testing.T) {
 	log := logger.New("test-service", "1.0.0")
 	m := metrics.New()
 	tokenStore := auth.NewTokenStore(log)
-	tokenStore.Tokens()["test-token"] = "test-tenant"
+	require.NoError(t, tokenStore.Add("test-token", "test-tenant"))
 
 	h := handler.New(tokenStore, log, m)
 
@@ -535,7 +547,7 @@ func TestValidateTokenHandler_CaseInsensitiveBearer(t *testing.T) {
 	l := logger.New("test-service", "1.0.0")
 	m := metrics.New()
 	tokenStore := auth.NewTokenStore(l)
-	tokenStore.Tokens()["test-token"] = "tenant-test"
+	require.NoError(t, tokenStore.Add("test-token", "tenant-test"))
 
 	h := handler.New(tokenStore, l, m)
 
@@ -549,4 +561,174 @@ func TestValidateTokenHandler_CaseInsensitiveBearer(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "tenant-test", resp.Header.Get("X-Scope-OrgID"))
+}
+
+func discardLogger() *logger.Logger {
+	return &logger.Logger{Logger: log.New(io.Discard, "", 0), Level: "error"}
+}
+
+// TestTokenStore_TrimsWhitespace verifies tokens from files/secrets with a
+// trailing newline still match the trimmed bearer token
+func TestTokenStore_TrimsWhitespace(t *testing.T) {
+	t.Setenv("TENANT_X_TOKEN", "  secret-x\n")
+
+	ts := auth.NewTokenStore(discardLogger())
+	require.NoError(t, ts.LoadFromEnv())
+
+	tenant, ok := ts.Validate("secret-x")
+	assert.True(t, ok)
+	assert.Equal(t, "x", tenant)
+}
+
+// TestTokenStore_IgnoresMalformedEnvNames verifies TENANT_TOKEN and
+// TENANT__TOKEN are not treated as tenants
+func TestTokenStore_IgnoresMalformedEnvNames(t *testing.T) {
+	t.Setenv("TENANT_TOKEN", "bare")
+	t.Setenv("TENANT__TOKEN", "empty-id")
+
+	ts := auth.NewTokenStore(discardLogger())
+	require.NoError(t, ts.LoadFromEnv())
+
+	_, ok := ts.Validate("bare")
+	assert.False(t, ok)
+	_, ok = ts.Validate("empty-id")
+	assert.False(t, ok)
+}
+
+// TestTokenStore_RejectsInvalidTenantID verifies invalid tenant IDs fail loading
+func TestTokenStore_RejectsInvalidTenantID(t *testing.T) {
+	t.Setenv("VALID_TOKENS_JSON", `{"a|b": "federated-token", "good": "good-token"}`)
+
+	ts := auth.NewTokenStore(discardLogger())
+	err := ts.LoadFromEnv()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "a|b")
+	_, ok := ts.Validate("federated-token")
+	assert.False(t, ok)
+	_, ok = ts.Validate("good-token")
+	assert.True(t, ok, "valid entries are still loaded")
+}
+
+// TestTokenStore_RejectsSharedToken verifies one token cannot map to two tenants
+func TestTokenStore_RejectsSharedToken(t *testing.T) {
+	ts := auth.NewTokenStore(discardLogger())
+	require.NoError(t, ts.Add("same", "tenant-a"))
+	assert.Error(t, ts.Add("same", "tenant-b"))
+	assert.NoError(t, ts.Add("same", "tenant-a"), "re-adding the same mapping is fine")
+}
+
+// TestValidateTenantID covers Mimir tenant ID rules
+func TestValidateTenantID(t *testing.T) {
+	valid := []string{"a", "prod", "Tenant-1", "team_x.prod", "a!*'()"}
+	for _, id := range valid {
+		assert.NoError(t, auth.ValidateTenantID(id), id)
+	}
+	invalid := []string{"", ".", "..", "a|b", "has space", "slash/x", "ünï", string(make([]byte, 151))}
+	for _, id := range invalid {
+		assert.Error(t, auth.ValidateTenantID(id), "%q", id)
+	}
+}
+
+// TestTokenStore_TokensReturnsCopy verifies callers cannot mutate the store
+func TestTokenStore_TokensReturnsCopy(t *testing.T) {
+	ts := auth.NewTokenStore(discardLogger())
+	require.NoError(t, ts.Add("tok", "a"))
+
+	ts.Tokens()["injected"] = "evil"
+
+	_, ok := ts.Validate("injected")
+	assert.False(t, ok)
+}
+
+// TestValidateTokenHandler_EmptyBearer returns 401 for a bearer scheme without token
+func TestValidateTokenHandler_EmptyBearer(t *testing.T) {
+	ts := auth.NewTokenStore(discardLogger())
+	h := handler.New(ts, discardLogger(), metrics.New())
+	app := fiber.New()
+	app.Get("/validate-token", h.ValidateToken)
+
+	for _, header := range []string{"Bearer", "Bearer    ", "Bear"} {
+		req := httptest.NewRequest("GET", "/validate-token", nil)
+		req.Header.Set("Authorization", header)
+		resp, err := app.Test(req, -1)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode, "%q", header)
+	}
+}
+
+// TestCustomErrorHandler_HidesInternalErrors verifies non-fiber errors return a generic 500
+func TestCustomErrorHandler_HidesInternalErrors(t *testing.T) {
+	app := fiber.New(fiber.Config{ErrorHandler: handler.CustomErrorHandler(discardLogger(), metrics.New())})
+	app.Get("/boom", func(c *fiber.Ctx) error {
+		return errors.New("dial tcp 10.0.0.5:5432: connection refused")
+	})
+
+	resp, err := app.Test(httptest.NewRequest("GET", "/boom", nil), -1)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+
+	var body map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "internal server error", body["error"])
+}
+
+// newRateLimitedApp builds an app configured like main.go's proxy handling
+func newRateLimitedApp(t *testing.T, trusted []string) *fiber.App {
+	t.Helper()
+	l := discardLogger()
+	m := metrics.New()
+	ts := auth.NewTokenStore(l)
+	require.NoError(t, ts.Add("good", "a"))
+	h := handler.New(ts, l, m)
+
+	app := fiber.New(fiber.Config{
+		ProxyHeader:             fiber.HeaderXForwardedFor,
+		EnableTrustedProxyCheck: true,
+		TrustedProxies:          trusted,
+		EnableIPValidation:      true,
+	})
+	app.Get("/validate-token", middleware.RateLimiter(l, m, 2, time.Minute), h.ValidateToken)
+	return app
+}
+
+func failedAttemptCodes(t *testing.T, app *fiber.App, n int) []int {
+	t.Helper()
+	codes := make([]int, 0, n)
+	for i := 0; i < n; i++ {
+		req := httptest.NewRequest("GET", "/validate-token", nil)
+		req.Header.Set("Authorization", "Bearer wrong")
+		req.Header.Set("X-Forwarded-For", "203.0.113."+strconv.Itoa(i))
+		resp, err := app.Test(req, -1)
+		require.NoError(t, err)
+		codes = append(codes, resp.StatusCode)
+	}
+	return codes
+}
+
+// TestRateLimiting_SpoofedXFFFromUntrustedPeer verifies X-Forwarded-For from an
+// untrusted peer cannot be used to get a fresh rate limit bucket per request
+func TestRateLimiting_SpoofedXFFFromUntrustedPeer(t *testing.T) {
+	app := newRateLimitedApp(t, nil) // app.Test peer is 0.0.0.0, not trusted
+
+	codes := failedAttemptCodes(t, app, 4)
+	assert.Equal(t, []int{401, 401, 429, 429}, codes)
+}
+
+// TestRateLimiting_XFFFromTrustedProxy verifies client IPs from a trusted proxy
+// get separate buckets
+func TestRateLimiting_XFFFromTrustedProxy(t *testing.T) {
+	app := newRateLimitedApp(t, []string{"0.0.0.0"}) // app.Test peer address
+
+	codes := failedAttemptCodes(t, app, 4)
+	assert.Equal(t, []int{401, 401, 401, 401}, codes)
+}
+
+// TestConfig_TrustedProxies verifies comma-separated parsing
+func TestConfig_TrustedProxies(t *testing.T) {
+	t.Setenv("TRUSTED_PROXIES", " 10.0.0.0/8, ,192.168.1.1 ")
+	assert.Equal(t, []string{"10.0.0.0/8", "192.168.1.1"}, config.Load().TrustedProxies)
+
+	t.Setenv("TRUSTED_PROXIES", "")
+	assert.Empty(t, config.Load().TrustedProxies)
 }

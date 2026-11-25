@@ -89,10 +89,21 @@ X-RateLimit-Reset: <seconds>
 | `PORT` | No | `8080` | HTTP server port |
 | `TENANT_<ID>_TOKEN` | Yes* | — | Token for tenant `<ID>` (e.g., `TENANT_PROD_TOKEN=abc`) |
 | `VALID_TOKENS_JSON` | Yes* | — | Legacy JSON map: `{"tenant": "token"}` |
-| `RATE_LIMIT_MAX` | No | `100` | Max requests per window |
+| `RATE_LIMIT_MAX` | No | `100` | Max **failed** auth attempts per client IP per window (successful requests are not counted) |
 | `RATE_LIMIT_WINDOW` | No | `10s` | Rate limit window (Go duration) |
+| `TRUSTED_PROXIES` | No | — | Comma-separated proxy IPs/CIDRs whose `X-Forwarded-For` is trusted (e.g. the ingress pod CIDR). When empty, `X-Forwarded-For` is ignored and all clients behind a proxy share one rate-limit bucket |
 
 *At least one token configuration method required.
+
+Startup fails if any token entry is invalid: tenant IDs must be 1–150 characters
+of `[a-zA-Z0-9!-_.*'()]`, must not be `.`/`..` (Mimir rules; `|` is rejected
+because it is Mimir's tenant-federation separator), and one token cannot map to
+two tenants. Surrounding whitespace in tokens is trimmed.
+
+The proxies listed in `TRUSTED_PROXIES` must overwrite (not append to) a
+client-supplied `X-Forwarded-For`; the left-most valid IP is used as the client
+IP. ingress-nginx does this by default (`use-forwarded-headers: false`), as does
+Traefik for untrusted entrypoints.
 
 ### Token Patterns
 

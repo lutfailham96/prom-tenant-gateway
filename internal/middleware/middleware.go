@@ -42,9 +42,12 @@ func RateLimiter(log *logger.Logger, m *metrics.Metrics, max int, window time.Du
 	return limiter.New(limiter.Config{
 		Max:        max,
 		Expiration: window,
-		KeyGenerator: func(c *fiber.Ctx) string {
-			return c.IP()
-		},
+		// Only failed attempts count towards the limit: this throttles token
+		// brute-forcing without rate limiting legitimate remote_write/query
+		// traffic, where every request triggers a /validate-token call.
+		// The key is c.IP() (Fiber default), which honours X-Forwarded-For
+		// only from TRUSTED_PROXIES.
+		SkipSuccessfulRequests: true,
 		LimitReached: func(c *fiber.Ctx) error {
 			m.IncFailed()
 			log.Warn("Rate limit exceeded", map[string]interface{}{

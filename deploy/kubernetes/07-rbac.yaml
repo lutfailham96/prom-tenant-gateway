@@ -1,3 +1,5 @@
+# The gateway never calls the Kubernetes API, so it gets a dedicated
+# ServiceAccount with no Role/RoleBinding and no mounted API token.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -6,31 +8,4 @@ metadata:
   labels:
     app: prom-tenant-gateway
     app.kubernetes.io/managed-by: kustomize
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: prom-tenant-gateway
-  namespace: mimir
-  labels:
-    app: prom-tenant-gateway
-rules:
-- apiGroups: [""]
-  resources: ["configmaps", "secrets"]
-  verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: prom-tenant-gateway
-  namespace: mimir
-  labels:
-    app: prom-tenant-gateway
-subjects:
-- kind: ServiceAccount
-  name: prom-tenant-gateway
-  namespace: mimir
-roleRef:
-  kind: Role
-  name: prom-tenant-gateway
-  apiGroup: rbac.authorization.k8s.io
+automountServiceAccountToken: false

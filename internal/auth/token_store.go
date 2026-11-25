@@ -2,10 +2,20 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 
 	"github.com/lutfailham96/prom-tenant-gateway/internal/logger"
+)
+
+const (
+	envPrefix = "TENANT_"
+	envSuffix = "_TOKEN"
+
+	// maxTenantIDLength mirrors Mimir's tenant ID length limit.
+	maxTenantIDLength = 150
 )
 
 type TokenStore struct {
@@ -20,55 +30,105 @@ func NewTokenStore(log *logger.Logger) *TokenStore {
 	}
 }
 
-func (s *TokenStore) LoadFromEnv() {
-	// Support both patterns:
-	// 1. Legacy: VALID_TOKENS_JSON (for backward compatibility)
-	// 2. New: TENANT_A_TOKEN, TENANT_B_TOKEN, TENANT_C_TOKEN, etc.
+// ValidateTenantID enforces Mimir's tenant ID rules: 1-150 characters from
+// [a-zA-Z0-9!-_.*'()], and not "." or "..". The '|' character is rejected
+// because Mimir uses it as the tenant federation separator, which would let a
+// single token read several tenants.
+func ValidateTenantID(id string) error {
+	if id == "" {
+		return errors.New("tenant ID is empty")
+	}
+	if len(id) > maxTenantIDLength {
+		return fmt.Errorf("tenant ID %q exceeds %d characters", id, maxTenantIDLength)
+	}
+	if id == "." || id == ".." {
+		return fmt.Errorf("tenant ID %q is not allowed", id)
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case strings.IndexByte("!-_.*'()", c) >= 0:
+		default:
+			return fmt.Errorf("tenant ID %q contains invalid character %q", id, c)
+		}
+	}
+	return nil
+}
 
-	// Check legacy first
+// Add registers a token for a tenant. The token is trimmed of surrounding
+// whitespace (secrets created from files often carry a trailing newline).
+func (s *TokenStore) Add(token, tenantID string) error {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return fmt.Errorf("empty token for tenant %q", tenantID)
+	}
+	if err := ValidateTenantID(tenantID); err != nil {
+		return err
+	}
+	if existing, ok := s.tokens[token]; ok && existing != tenantID {
+		return fmt.Errorf("token is shared by tenants %q and %q", existing, tenantID)
+	}
+	s.tokens[token] = tenantID
+	return nil
+}
+
+// LoadFromEnv loads tokens from VALID_TOKENS_JSON (legacy) and
+// TENANT_<ID>_TOKEN variables. Any invalid entry is an error so a
+// misconfiguration fails at startup instead of silently dropping a tenant.
+func (s *TokenStore) LoadFromEnv() error {
+	var errs []error
+
 	if tokensJSON := os.Getenv("VALID_TOKENS_JSON"); tokensJSON != "" {
 		var legacyTokens map[string]string
 		if err := json.Unmarshal([]byte(tokensJSON), &legacyTokens); err != nil {
-			s.logger.Warn("Failed to parse VALID_TOKENS_JSON", map[string]interface{}{
-				"error": err.Error(),
-			})
+			errs = append(errs, fmt.Errorf("parse VALID_TOKENS_JSON: %w", err))
 		} else {
+			loaded := 0
 			for tenant, token := range legacyTokens {
-				if token != "" {
-					s.tokens[token] = tenant
+				if strings.TrimSpace(token) == "" {
+					continue
 				}
+				if err := s.Add(token, tenant); err != nil {
+					errs = append(errs, fmt.Errorf("VALID_TOKENS_JSON: %w", err))
+					continue
+				}
+				loaded++
 			}
 			s.logger.Info("Loaded tokens from VALID_TOKENS_JSON (legacy)", map[string]interface{}{
-				"count": len(legacyTokens),
+				"count": loaded,
 			})
 		}
 	}
 
-	// Load from TENANT_*_TOKEN env vars (new pattern)
 	for _, env := range os.Environ() {
-		parts := strings.SplitN(env, "=", 2)
-		if len(parts) != 2 {
+		key, value, ok := strings.Cut(env, "=")
+		if !ok || !isTenantTokenEnv(key) || strings.TrimSpace(value) == "" {
 			continue
 		}
-		key := parts[0]
-		value := parts[1]
-
-		if strings.HasPrefix(key, "TENANT_") && strings.HasSuffix(key, "_TOKEN") && value != "" {
-			tenantPart := strings.TrimPrefix(key, "TENANT_")
-			tenantPart = strings.TrimSuffix(tenantPart, "_TOKEN")
-			tenantID := strings.ToLower(tenantPart)
-
-			s.tokens[value] = tenantID
-			s.logger.Info("Loaded token for tenant", map[string]interface{}{
-				"tenant_id": tenantID,
-				"source":    key,
-			})
+		tenantID := ExtractTenantIDFromEnvVar(key)
+		if err := s.Add(value, tenantID); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", key, err))
+			continue
 		}
+		s.logger.Info("Loaded token for tenant", map[string]interface{}{
+			"tenant_id": tenantID,
+			"source":    key,
+		})
 	}
 
 	s.logger.Info("Loaded tenant tokens", map[string]interface{}{
 		"count": len(s.tokens),
 	})
+	return errors.Join(errs...)
+}
+
+// isTenantTokenEnv reports whether key has the form TENANT_<ID>_TOKEN with a
+// non-empty <ID>. A bare TENANT_TOKEN does not qualify.
+func isTenantTokenEnv(key string) bool {
+	return len(key) > len(envPrefix)+len(envSuffix) &&
+		strings.HasPrefix(key, envPrefix) &&
+		strings.HasSuffix(key, envSuffix)
 }
 
 func (s *TokenStore) Validate(token string) (tenantID string, ok bool) {
@@ -80,12 +140,17 @@ func (s *TokenStore) Count() int {
 	return len(s.tokens)
 }
 
+// Tokens returns a copy of the token → tenant mapping.
 func (s *TokenStore) Tokens() map[string]string {
-	return s.tokens
+	out := make(map[string]string, len(s.tokens))
+	for k, v := range s.tokens {
+		out[k] = v
+	}
+	return out
 }
 
 func ExtractTenantIDFromEnvVar(envVar string) string {
-	tenantPart := strings.TrimPrefix(envVar, "TENANT_")
-	tenantPart = strings.TrimSuffix(tenantPart, "_TOKEN")
+	tenantPart := strings.TrimPrefix(envVar, envPrefix)
+	tenantPart = strings.TrimSuffix(tenantPart, envSuffix)
 	return strings.ToLower(tenantPart)
 }

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 
@@ -38,10 +39,8 @@ func (h *Handler) ValidateToken(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "missing Authorization header"})
 	}
 
-	var token string
-	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
-		token = strings.TrimSpace(authHeader[7:])
-	} else {
+	token, ok := bearerToken(authHeader)
+	if !ok {
 		h.metrics.IncFailed()
 		h.logger.Warn("Invalid Authorization header format", map[string]interface{}{
 			"ip":     c.IP(),
@@ -72,6 +71,17 @@ func (h *Handler) ValidateToken(c *fiber.Ctx) error {
 	})
 
 	return c.SendStatus(fiber.StatusOK)
+}
+
+// bearerToken extracts the token from an "Authorization: Bearer <token>"
+// header. The scheme is matched case-insensitively without allocating.
+func bearerToken(header string) (string, bool) {
+	const prefix = "Bearer "
+	if len(header) < len(prefix) || !strings.EqualFold(header[:len(prefix)], prefix) {
+		return "", false
+	}
+	token := strings.TrimSpace(header[len(prefix):])
+	return token, token != ""
 }
 
 func (h *Handler) Health(c *fiber.Ctx) error {
@@ -113,8 +123,13 @@ func CustomErrorHandler(log *logger.Logger, m *metrics.Metrics) fiber.ErrorHandl
 	return func(c *fiber.Ctx, err error) error {
 		m.IncFailed()
 		code := fiber.StatusInternalServerError
-		if e, ok := err.(*fiber.Error); ok {
-			code = e.Code
+		// Only *fiber.Error messages are meant for clients; anything else may
+		// carry internal details and is replaced with a generic message.
+		message := "internal server error"
+		var fe *fiber.Error
+		if errors.As(err, &fe) {
+			code = fe.Code
+			message = fe.Message
 		}
 		log.Error("Request error", map[string]interface{}{
 			"path":   c.Path(),
@@ -123,6 +138,6 @@ func CustomErrorHandler(log *logger.Logger, m *metrics.Metrics) fiber.ErrorHandl
 			"error":  err.Error(),
 			"status": code,
 		})
-		return c.Status(code).JSON(fiber.Map{"error": err.Error()})
+		return c.Status(code).JSON(fiber.Map{"error": message})
 	}
 }
