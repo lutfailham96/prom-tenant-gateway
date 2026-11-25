@@ -20,7 +20,7 @@ const bodyLimit = 4 * 1024
 // newApp builds the Fiber application with its production configuration and
 // routes. It is separate from main so tests exercise the real wiring.
 func newApp(cfg config.Config, log *slog.Logger, m *metrics.Metrics, tokenStore *auth.TokenStore) *fiber.App {
-	h := handler.New(tokenStore, m)
+	h := handler.New(tokenStore, m, version)
 
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: true,

@@ -1,0 +1,18 @@
+# Only go.mod, go.sum, cmd/ and internal/ are needed to build.
+.git
+.github
+.claude
+.codebase-memory
+deploy
+test
+Dockerfile
+.dockerignore
+docker-compose*.yml
+*.md
+coverage*.out
+*.test
+# Never send token files to the build context.
+.env
+.env.*
+tokens.env
+*.tokens.env

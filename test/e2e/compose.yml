@@ -1,0 +1,50 @@
+# E2E stack: four gateway instances with separate rate-limit state, on a
+# fixed subnet so probes can use known (trusted/untrusted) source IPs.
+# Run via ./run.sh; all tokens below are dummy values.
+name: ptg-e2e
+x-gw: &gw
+  image: prom-tenant-gateway:e2e
+  pull_policy: never
+  healthcheck:
+    test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/healthz"]
+    interval: 2s
+    timeout: 2s
+    retries: 15
+services:
+  gw-main:
+    <<: *gw
+    build:
+      context: ../..
+      target: runner
+      args:
+        VERSION: e2e-test
+    pull_policy: build
+    environment:
+      TENANT_A_TOKEN: e2e-token-tenant-a-0123456789abcdef0123456789
+      TENANT_B_TOKEN: e2e-token-tenant-b-0123456789abcdef0123456789
+      RATE_LIMIT_ENABLED: "false"
+    networks: { e2e: { ipv4_address: 172.30.0.2 } }
+  gw-limit:
+    <<: *gw
+    environment:
+      TENANT_A_TOKEN: short-token-a
+      RATE_LIMIT_MAX: "5"
+      RATE_LIMIT_WINDOW: 5s
+    networks: { e2e: { ipv4_address: 172.30.0.3 } }
+  gw-proxy:
+    <<: *gw
+    environment:
+      TENANT_A_TOKEN: e2e-token-tenant-a-0123456789abcdef0123456789
+      RATE_LIMIT_MAX: "3"
+      RATE_LIMIT_WINDOW: 60s
+      TRUSTED_PROXIES: 172.30.0.10
+    networks: { e2e: { ipv4_address: 172.30.0.4 } }
+  gw-debug:
+    <<: *gw
+    environment:
+      TENANT_A_TOKEN: e2e-token-tenant-a-0123456789abcdef0123456789
+      LOG_LEVEL: debug
+    networks: { e2e: { ipv4_address: 172.30.0.5 } }
+networks:
+  e2e:
+    ipam: { config: [ { subnet: 172.30.0.0/24 } ] }
