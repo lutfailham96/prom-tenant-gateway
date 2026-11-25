@@ -3,3 +3,6 @@ kustomize
 # Local token files for creating the Kubernetes Secret
 tokens.env
 *.tokens.env
+
+# codebase-memory-mcp local index
+.codebase-memory/
