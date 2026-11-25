@@ -11,4 +11,7 @@ data:
   RATE_LIMIT_MAX: "100"
   RATE_LIMIT_WINDOW: "10s"
   LOG_LEVEL: "info"
-  LOG_FORMAT: "json"
+  # Proxies whose X-Forwarded-For header is trusted for client IP / rate
+  # limiting. Narrow this to the ingress-nginx / Traefik pod CIDR. If empty,
+  # every request is keyed on the proxy IP and all clients share one bucket.
+  TRUSTED_PROXIES: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"

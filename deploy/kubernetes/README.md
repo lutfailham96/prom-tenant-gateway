@@ -37,14 +37,14 @@ kustomize build deploy/kubernetes --enable-alpha-plugins \
 
 | File | Description |
 |------|-------------|
-| `00-namespace.yaml` | `mimir` namespace |
+| `00-namespace.yaml` | `mimir` namespace — **not** in kustomization (owned by Mimir); apply manually only if missing |
 | `01-configmap.yaml` | App config (rate limits, log level, etc.) |
 | `02-secret.yaml` | **Tokens** - MUST UPDATE BEFORE APPLY |
-| `03-deployment.yaml` | 3 replicas, probes, resources, security |
+| `03-deployment.yaml` | Probes, resources, security, preStop drain, `GOMEMLIMIT` (replicas managed by HPA) |
 | `04-service.yaml` | ClusterIP service (port 80 → 8080) |
-| `05-hpa.yaml` | HPA: CPU 70%, Memory 80%, 3-10 replicas |
+| `05-hpa.yaml` | HPA: CPU 70%, 3-10 replicas |
 | `06-poddisruptionbudget.yaml` | Min 2 available during disruptions |
-| `07-rbac.yaml` | ServiceAccount + minimal RBAC |
+| `07-rbac.yaml` | ServiceAccount only — no Role, no API token mounted |
 | `kustomization.yaml` | Kustomize config (images, labels, generators) |
 
 ## Security Features
@@ -54,7 +54,7 @@ kustomize build deploy/kubernetes --enable-alpha-plugins \
 - Dropped all capabilities
 - No privilege escalation
 - Pod anti-affinity (spread across nodes)
-- Minimal RBAC
+- No Kubernetes API access (no RBAC, `automountServiceAccountToken: false`)
 
 ## Image Updates
 

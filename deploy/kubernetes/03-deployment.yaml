@@ -8,7 +8,8 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/version: "1.0.0"
 spec:
-  replicas: 3
+  # replicas is managed by the HPA (05-hpa.yaml); setting it here would reset
+  # the scale on every apply.
   selector:
     matchLabels:
       app: prom-tenant-gateway
@@ -23,6 +24,9 @@ spec:
         prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: prom-tenant-gateway
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -43,6 +47,18 @@ spec:
             name: prom-tenant-gateway-config
         - secretRef:
             name: prom-tenant-gateway-tokens
+        env:
+        # Soft heap limit ~90% of limits.memory so the GC works harder before
+        # the container is OOM-killed. Keep in sync with resources.limits.memory.
+        - name: GOMEMLIMIT
+          value: "230MiB"
+        lifecycle:
+          preStop:
+            # Keep serving while endpoints/ingress stop routing to this pod,
+            # then SIGTERM triggers the in-app graceful shutdown (10s).
+            # Switch to `sleep: {seconds: 5}` if the image drops /bin/sleep.
+            exec:
+              command: ["sleep", "5"]
         livenessProbe:
           httpGet:
             path: /healthz

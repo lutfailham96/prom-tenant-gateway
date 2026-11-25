@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -12,6 +13,10 @@ type Config struct {
 	RateLimitMax     int
 	RateLimitWindow  time.Duration
 	LogLevel         string
+	// TrustedProxies lists proxy IPs/CIDRs whose X-Forwarded-For header is
+	// honoured. When empty, X-Forwarded-For is ignored and the TCP peer
+	// address is used as the client IP.
+	TrustedProxies []string
 }
 
 func Load() Config {
@@ -50,10 +55,22 @@ func Load() Config {
 	}
 
 	return Config{
+		TrustedProxies:   splitList(os.Getenv("TRUSTED_PROXIES")),
 		Port:             port,
 		RateLimitEnabled: rateLimitEnabled,
 		RateLimitMax:     rateLimitMax,
 		RateLimitWindow:  rateLimitWindow,
 		LogLevel:         logLevel,
 	}
+}
+
+// splitList parses a comma-separated list, dropping empty entries.
+func splitList(v string) []string {
+	var out []string
+	for _, item := range strings.Split(v, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }

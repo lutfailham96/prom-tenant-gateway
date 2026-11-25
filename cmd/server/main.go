@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/monitor"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/lutfailham96/prom-tenant-gateway/internal/auth"
 	"github.com/lutfailham96/prom-tenant-gateway/internal/config"
@@ -30,7 +29,12 @@ func main() {
 	m := metrics.New()
 	tokenStore := auth.NewTokenStore(log)
 
-	tokenStore.LoadFromEnv()
+	if err := tokenStore.LoadFromEnv(); err != nil {
+		log.Error("Invalid token configuration", map[string]interface{}{
+			"error": err.Error(),
+		})
+		os.Exit(1)
+	}
 
 	if tokenStore.Count() == 0 {
 		log.Error("No valid tokens configured", map[string]interface{}{
@@ -44,18 +48,29 @@ func main() {
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: true,
 		ErrorHandler:          handler.CustomErrorHandler(log, m),
-		ProxyHeader:           fiber.HeaderXForwardedFor,
-		ReadTimeout:           10 * time.Second,
-		WriteTimeout:          10 * time.Second,
-		IdleTimeout:           120 * time.Second,
+		// X-Forwarded-For is only honoured when the peer is a trusted proxy;
+		// otherwise any caller could spoof its IP and bypass the rate limiter.
+		ProxyHeader:             fiber.HeaderXForwardedFor,
+		EnableTrustedProxyCheck: true,
+		TrustedProxies:          cfg.TrustedProxies,
+		// Resolve c.IP() to a single valid IP instead of the raw header value.
+		EnableIPValidation: true,
+		// All endpoints are GET-only; auth subrequests carry no body.
+		BodyLimit:    4 * 1024,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	})
+
+	if len(cfg.TrustedProxies) == 0 {
+		log.Warn("TRUSTED_PROXIES not set: X-Forwarded-For is ignored and rate limiting keys on the proxy IP", map[string]interface{}{})
+	}
 
 	app.Use(recover.New())
 	app.Use(middleware.RequestLogger(log))
 
 	app.Get("/metrics", h.Metrics)
 	app.Get("/healthz", h.Health)
-	app.Get("/dashboard", monitor.New())
 
 	// Rate limiting only on auth endpoint
 	if cfg.RateLimitEnabled {
