@@ -13,12 +13,13 @@ resources:
 - 06-poddisruptionbudget.yaml
 - 07-rbac.yaml
 
-commonLabels:
-  app: prom-tenant-gateway
-  app.kubernetes.io/name: prom-tenant-gateway
-  app.kubernetes.io/instance: prom-tenant-gateway
-  app.kubernetes.io/managed-by: kustomize
-  app.kubernetes.io/component: auth-gateway
+labels:
+- pairs:
+    app: prom-tenant-gateway
+    app.kubernetes.io/name: prom-tenant-gateway
+    app.kubernetes.io/instance: prom-tenant-gateway
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/component: auth-gateway
 
 images:
 - name: lutfailham/prom-tenant-gateway
