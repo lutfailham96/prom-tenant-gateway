@@ -25,6 +25,7 @@ const (
 func main() {
 	log := logger.New(serviceName, version)
 	cfg := config.Load()
+	log.SetLevel(cfg.LogLevel)
 	m := metrics.New()
 	tokenStore := auth.NewTokenStore(log)
 
@@ -42,6 +43,7 @@ func main() {
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: true,
 		ErrorHandler:          handler.CustomErrorHandler(log, m),
+		ProxyHeader:           fiber.HeaderXForwardedFor,
 	})
 
 	app.Use(recover.New())

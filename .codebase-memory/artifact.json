@@ -1,11 +1,11 @@
 {
     "schema_version": 2,
-    "commit": "5bafe84e8934e99e3c716523de340b3bd961b140",
-    "indexed_at": "2026-11-24T04:07:23Z",
-    "project": "go-grafana-auth-service",
-    "nodes": 151,
-    "edges": 559,
+    "commit": "e9aed9245e0d0e76e486f7817db3cde7580dfff3",
+    "indexed_at": "2026-11-25T07:43:32Z",
+    "project": "prom-tenant-gateway",
+    "nodes": 182,
+    "edges": 633,
     "original_size": 2686976,
-    "compressed_size": 150435,
+    "compressed_size": 169558,
     "compression_level": 9
 }

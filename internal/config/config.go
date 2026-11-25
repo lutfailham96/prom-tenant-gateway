@@ -7,14 +7,18 @@ import (
 )
 
 type Config struct {
-	Port              string
-	RateLimitEnabled  bool
-	RateLimitMax      int
-	RateLimitWindow   time.Duration
+	Port             string
+	RateLimitEnabled bool
+	RateLimitMax     int
+	RateLimitWindow  time.Duration
+	LogLevel         string
 }
 
 func Load() Config {
-	port := os.Getenv("HTTP_PORT")
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = os.Getenv("HTTP_PORT")
+	}
 	if port == "" {
 		port = "8080"
 	}
@@ -40,10 +44,16 @@ func Load() Config {
 		}
 	}
 
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "" {
+		logLevel = "info"
+	}
+
 	return Config{
 		Port:             port,
 		RateLimitEnabled: rateLimitEnabled,
 		RateLimitMax:     rateLimitMax,
 		RateLimitWindow:  rateLimitWindow,
+		LogLevel:         logLevel,
 	}
 }

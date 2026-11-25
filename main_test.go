@@ -457,3 +457,96 @@ func TestMetrics_increment(t *testing.T) {
 	assert.Equal(t, uint64(1), success)
 	assert.Equal(t, uint64(1), failed)
 }
+
+// TestConfig_PortAndLogLevel verifies PORT precedence and LOG_LEVEL
+func TestConfig_PortAndLogLevel(t *testing.T) {
+	// Test PORT precedence over HTTP_PORT
+	os.Setenv("PORT", "9090")
+	os.Setenv("HTTP_PORT", "8080")
+	os.Setenv("LOG_LEVEL", "debug")
+	defer func() {
+		os.Unsetenv("PORT")
+		os.Unsetenv("HTTP_PORT")
+		os.Unsetenv("LOG_LEVEL")
+	}()
+
+	cfg := config.Load()
+	assert.Equal(t, "9090", cfg.Port)
+	assert.Equal(t, "debug", cfg.LogLevel)
+
+	// Test fallback to HTTP_PORT when PORT is empty
+	os.Unsetenv("PORT")
+	cfgFallback := config.Load()
+	assert.Equal(t, "8080", cfgFallback.Port)
+}
+
+// TestLogger_LevelFiltering verifies logger drops messages below configured level
+func TestLogger_LevelFiltering(t *testing.T) {
+	var buf bytes.Buffer
+	l := &logger.Logger{Logger: log.New(&buf, "", 0), Service: "test", Version: "1.0.0", Level: "info"}
+
+	// Debug message should be dropped
+	l.Debug("dropped debug message", nil)
+	assert.Equal(t, 0, buf.Len())
+
+	// Info message should be printed
+	l.Info("allowed info message", nil)
+	assert.Contains(t, buf.String(), "allowed info message")
+
+	// Set level to debug
+	buf.Reset()
+	l.SetLevel("debug")
+	l.Debug("allowed debug message", nil)
+	assert.Contains(t, buf.String(), "allowed debug message")
+}
+
+// TestRequestLogger_SkipProbes verifies /healthz and /metrics are not logged
+func TestRequestLogger_SkipProbes(t *testing.T) {
+	var buf bytes.Buffer
+	l := &logger.Logger{Logger: log.New(&buf, "", 0), Service: "test", Version: "1.0.0", Level: "info"}
+
+	app := fiber.New()
+	app.Use(middleware.RequestLogger(l))
+	app.Get("/healthz", func(c *fiber.Ctx) error { return c.SendStatus(fiber.StatusOK) })
+	app.Get("/metrics", func(c *fiber.Ctx) error { return c.SendStatus(fiber.StatusOK) })
+	app.Get("/api/data", func(c *fiber.Ctx) error { return c.SendStatus(fiber.StatusOK) })
+
+	// /healthz should not be logged
+	req := httptest.NewRequest("GET", "/healthz", nil)
+	_, err := app.Test(req, -1)
+	require.NoError(t, err)
+	assert.Equal(t, 0, buf.Len())
+
+	// /metrics should not be logged
+	req = httptest.NewRequest("GET", "/metrics", nil)
+	_, err = app.Test(req, -1)
+	require.NoError(t, err)
+	assert.Equal(t, 0, buf.Len())
+
+	// regular route should be logged
+	req = httptest.NewRequest("GET", "/api/data", nil)
+	_, err = app.Test(req, -1)
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "/api/data")
+}
+
+// TestValidateTokenHandler_CaseInsensitiveBearer verifies lowercase bearer and whitespace handling
+func TestValidateTokenHandler_CaseInsensitiveBearer(t *testing.T) {
+	l := logger.New("test-service", "1.0.0")
+	m := metrics.New()
+	tokenStore := auth.NewTokenStore(l)
+	tokenStore.Tokens()["test-token"] = "tenant-test"
+
+	h := handler.New(tokenStore, l, m)
+
+	app := fiber.New()
+	app.Get("/validate-token", h.ValidateToken)
+
+	req := httptest.NewRequest("GET", "/validate-token", nil)
+	req.Header.Set("Authorization", "bearer   test-token  ")
+	resp, err := app.Test(req, -1)
+
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "tenant-test", resp.Header.Get("X-Scope-OrgID"))
+}

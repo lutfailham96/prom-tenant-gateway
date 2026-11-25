@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -11,6 +12,22 @@ type Logger struct {
 	*log.Logger
 	Service string
 	Version string
+	Level   string
+}
+
+func parseLevel(level string) int {
+	switch strings.ToLower(level) {
+	case "debug":
+		return 0
+	case "info":
+		return 1
+	case "warn", "warning":
+		return 2
+	case "error":
+		return 3
+	default:
+		return 1
+	}
 }
 
 func New(service, version string) *Logger {
@@ -18,10 +35,20 @@ func New(service, version string) *Logger {
 		Logger:  log.New(os.Stdout, "", 0),
 		Service: service,
 		Version: version,
+		Level:   "info",
+	}
+}
+
+func (l *Logger) SetLevel(level string) {
+	if level != "" {
+		l.Level = strings.ToLower(level)
 	}
 }
 
 func (l *Logger) log(level, message string, fields map[string]interface{}) {
+	if parseLevel(level) < parseLevel(l.Level) {
+		return
+	}
 	entry := map[string]interface{}{
 		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
 		"level":     level,
