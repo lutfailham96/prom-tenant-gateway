@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -14,10 +15,32 @@ import (
 	"github.com/lutfailham96/prom-tenant-gateway/internal/metrics"
 )
 
-const (
-	serviceName = "prom-tenant-gateway"
-	version     = "1.0.0"
-)
+const serviceName = "prom-tenant-gateway"
+
+// version is set at build time:
+//
+//	go build -ldflags "-X main.version=1.2.3" ./cmd/server
+//
+// The Dockerfile passes it from the VERSION build arg, which CI derives from
+// the git tag. Without ldflags it falls back to the module version recorded by
+// the Go toolchain, or "dev".
+var version = "dev"
+
+func init() {
+	version = resolveVersion(version)
+}
+
+// resolveVersion returns v unless it is the "dev" placeholder, in which case
+// it tries the main module version from the embedded build info.
+func resolveVersion(v string) string {
+	if v != "dev" {
+		return v
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return v
+}
 
 func main() {
 	cfg := config.Load()

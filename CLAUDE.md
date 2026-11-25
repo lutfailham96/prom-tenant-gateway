@@ -6,7 +6,8 @@
   ```bash
   source /opt/data/profiles/devops/credentials/env/docker-dind.env
   ```
-- In E2E tests, service ports are internal to dind. Run test assertions from an ephemeral container attached to the same network (e.g. `prom-tenant-gateway_test-network`).
+- E2E suite: `test/e2e/run.sh` (after sourcing the dind env). It builds the image, starts the stack from `test/e2e/compose.yml` and runs assertions from probe containers on the `ptg-e2e_e2e` network.
+- In E2E tests, service ports are internal to dind. Run test assertions from an ephemeral container attached to the same network.
 - Healthcheck commands must use `127.0.0.1`, never `localhost` (prevents IPv6 `::1` connection refused in Alpine).
 
 ## Git Commit Rules

@@ -22,8 +22,8 @@ Lightweight authentication service for Grafana/Mimir multi-tenant environments. 
 # Run tests
 go test -v ./...
 
-# Build
-go build -o bin/server ./cmd/server
+# Build (version is injected at link time; defaults to "dev")
+go build -trimpath -ldflags "-X main.version=$(git describe --tags --always)" -o bin/server ./cmd/server
 
 # Run with environment variables
 TENANT_A_TOKEN=token-a \
@@ -37,8 +37,8 @@ RATE_LIMIT_WINDOW=10s \
 ### Docker
 
 ```bash
-# Build
-docker build -t prom-tenant-gateway .
+# Build (BuildKit required for the cache mounts; default since Docker 23)
+docker build --build-arg VERSION=1.2.3 -t prom-tenant-gateway .
 
 # Run
 docker run -d \
@@ -50,18 +50,10 @@ docker run -d \
   prom-tenant-gateway
 ```
 
-### Docker Compose (E2E Test)
+### E2E tests
 
-```bash
-# Requires docker-dind environment
-source /opt/data/profiles/devops/credentials/env/docker-dind.env
-docker compose -f docker-compose.test.yml up --build -d
-
-# Test endpoints
-curl -H "Authorization: Bearer test-token-a" http://localhost:8080/validate-token
-curl http://localhost:8080/healthz
-curl http://localhost:8080/metrics
-```
+See [Testing](#testing): `test/e2e/run.sh` builds the image and runs the full
+end-to-end suite in Docker.
 
 ## API Endpoints
 
@@ -165,7 +157,8 @@ See `deploy/ingress/` for old nginx Ingress manifests.
 ├── deploy/
 │   ├── kubernetes/             # Deployment, Service, HPA, PDB, ...
 │   └── gateway-api/            # Kubernetes Gateway API manifests
-├── docker-compose.test.yml     # E2E test compose
+├── test/e2e/                   # End-to-end suite (run.sh + compose.yml)
+├── .dockerignore               # Keeps .git, deploy/, docs, token files out of the build context
 ├── Dockerfile                  # Multi-stage build
 └── go.mod / go.sum             # Dependencies
 ```
@@ -186,14 +179,19 @@ go tool cover -func=coverage.out
 golangci-lint run ./...
 go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
 
-# E2E via docker-dind
+# E2E (on this machine: against docker-dind)
 source /opt/data/profiles/devops/credentials/env/docker-dind.env
-docker compose -f docker-compose.test.yml up --build -d --wait
-# Ports are internal to dind: probe from a container on the test network
-docker run --rm --network prom-tenant-gateway_test-network alpine:3.23 sh -c \
-  'apk add --no-cache curl >/dev/null && curl -fsS http://prom-tenant-gateway:8080/healthz'
-docker compose -f docker-compose.test.yml down -v
+test/e2e/run.sh            # KEEP=1 keeps the stack, NOCACHE=1 rebuilds
 ```
+
+The E2E suite (`test/e2e/`) starts four gateway instances with separate
+rate-limit state and checks, from probe containers with fixed trusted and
+untrusted source IPs: token validation and status codes, body limit, exact
+metric counts, the JSON log schema (one line per failed request, no token
+values), rate limiting and window reset, `X-Forwarded-For` handling for trusted
+and untrusted peers, startup config validation, the build version from
+`-ldflags`, and graceful shutdown on SIGTERM. Exit code: 0 pass, 1 failures,
+2 environment error.
 
 CI (`.github/workflows/docker-build-push.yaml`) runs `gofmt`, `go mod tidy -diff`,
 `go vet`, `go test -race` with coverage, `govulncheck`, and `golangci-lint`; the

@@ -27,13 +27,16 @@ type Handler struct {
 	tokenStore     *auth.TokenStore
 	metrics        *metrics.Metrics
 	metricsHandler fiber.Handler
+	version        string
 }
 
-func New(tokenStore *auth.TokenStore, m *metrics.Metrics) *Handler {
+// New returns the HTTP handlers; version is reported by /healthz.
+func New(tokenStore *auth.TokenStore, m *metrics.Metrics, version string) *Handler {
 	return &Handler{
 		tokenStore:     tokenStore,
 		metrics:        m,
 		metricsHandler: adaptor.HTTPHandler(m.Handler()),
+		version:        version,
 	}
 }
 
@@ -91,7 +94,7 @@ func (h *Handler) Health(c *fiber.Ctx) error {
 		"status":    "healthy",
 		"uptime":    strconv.FormatFloat(h.metrics.Uptime().Seconds(), 'f', 2, 64) + "s",
 		"timestamp": c.Context().Time().UTC().Format("2006-01-02T15:04:05Z"),
-		"version":   "1.0.0",
+		"version":   h.version,
 	})
 }
 

@@ -61,20 +61,21 @@ the pods: `kubectl -n mimir rollout restart deployment/prom-tenant-gateway`.
 
 ## Image Updates
 
-Update image tag in `kustomization.yaml`:
-
-```yaml
-images:
-- name: lutfailham/prom-tenant-gateway
-  newTag: "1.2.3"  # or "latest"
-```
-
-Or via CLI:
+The image tag lives in one place: `image:` in `03-deployment.yaml` (pinned,
+never `:latest`). Releases are built by CI from a git tag: pushing `v1.2.3`
+publishes `lutfailham/prom-tenant-gateway:1.2.3` with version `1.2.3` baked into
+the binary (`-ldflags -X main.version`), so `/healthz` and
+`prom_tenant_gateway_build_info` always match the running image.
 
 ```bash
-kustomize edit set image lutfailham/prom-tenant-gateway=1.2.3
+git tag v1.2.3 && git push origin v1.2.3          # CI builds and pushes 1.2.3
+sed -i 's#prom-tenant-gateway:.*#prom-tenant-gateway:1.2.3#' deploy/kubernetes/03-deployment.yaml
 kubectl apply -k deploy/kubernetes
+kubectl -n mimir exec deploy/prom-tenant-gateway -- wget -qO- http://127.0.0.1:8080/healthz  # "version":"1.2.3"
 ```
+
+For stronger immutability pin the digest printed by CI instead
+(`image: lutfailham/prom-tenant-gateway:1.2.3@sha256:...`).
 
 ## Monitoring
 

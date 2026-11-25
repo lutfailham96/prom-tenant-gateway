@@ -29,7 +29,7 @@ func newApp(t *testing.T, tokens map[string]string) *fiber.App {
 		require.NoError(t, ts.Add(token, tenant))
 	}
 	m.SetTenants(ts.Tenants(), ts.Count())
-	h := handler.New(ts, m)
+	h := handler.New(ts, m, "9.9.9-test")
 
 	app := fiber.New(fiber.Config{ErrorHandler: handler.CustomErrorHandler(l)})
 	app.Get("/validate-token", h.ValidateToken)
@@ -115,7 +115,7 @@ func TestValidateToken_Rejected(t *testing.T) {
 func TestValidateToken_SetsAuthResultLocal(t *testing.T) {
 	ts := auth.NewTokenStore(logger.Discard())
 	require.NoError(t, ts.Add("good", "a"))
-	h := handler.New(ts, metrics.New("test"))
+	h := handler.New(ts, metrics.New("test"), "9.9.9-test")
 
 	var got []string
 	app := fiber.New()
@@ -149,7 +149,7 @@ func TestHealth(t *testing.T) {
 	assert.Equal(t, "healthy", body["status"])
 	assert.NotEmpty(t, body["uptime"])
 	assert.NotEmpty(t, body["timestamp"])
-	assert.Equal(t, "1.0.0", body["version"])
+	assert.Equal(t, "9.9.9-test", body["version"])
 }
 
 func TestMetrics_Exposition(t *testing.T) {

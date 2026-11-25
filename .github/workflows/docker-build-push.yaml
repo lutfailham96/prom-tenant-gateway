@@ -140,6 +140,10 @@ jobs:
           context: .
           file: ./Dockerfile
           target: runner
+          # Baked into the binary via -ldflags -X main.version: the git tag
+          # without "v" for releases, otherwise the branch name or pr-N.
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
