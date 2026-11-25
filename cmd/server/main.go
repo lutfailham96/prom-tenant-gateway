@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -19,44 +20,30 @@ const (
 )
 
 func main() {
-	log := logger.New(serviceName, version)
 	cfg := config.Load()
-	log.SetLevel(cfg.LogLevel)
-	m := metrics.New()
+	log := logger.New(os.Stdout, serviceName, version, logger.ParseLevel(cfg.LogLevel))
+	m := metrics.New(version)
 	tokenStore := auth.NewTokenStore(log)
 
 	if err := tokenStore.LoadFromEnv(); err != nil {
-		log.Error("Invalid token configuration", map[string]interface{}{
-			"error": err.Error(),
-		})
+		log.Error("Invalid token configuration", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
 	if tokenStore.Count() == 0 {
-		log.Error("No valid tokens configured", map[string]interface{}{
-			"error": "Set TENANT_*_TOKEN or VALID_TOKENS_JSON environment variables",
-		})
+		log.Error("No valid tokens configured",
+			slog.String("error", "Set TENANT_*_TOKEN or VALID_TOKENS_JSON environment variables"))
 		os.Exit(1)
 	}
+	m.SetTenants(tokenStore.Tenants(), tokenStore.Count())
 
 	app := newApp(cfg, log, m, tokenStore)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		<-sigCh
-		log.Info("Shutdown signal received, stopping server...", map[string]interface{}{})
-		cancel()
-	}()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
 
 	addr := ":" + cfg.Port
-	log.Info("Starting authentication service", map[string]interface{}{
-		"address": addr,
-		"port":    cfg.Port,
-	})
+	log.Info("Starting authentication service", slog.String("address", addr), slog.String("port", cfg.Port))
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -67,17 +54,14 @@ func main() {
 
 	select {
 	case <-ctx.Done():
+		log.Info("Shutdown signal received, stopping server...")
 		if err := app.ShutdownWithTimeout(10 * time.Second); err != nil {
-			log.Error("Error during shutdown", map[string]interface{}{
-				"error": err.Error(),
-			})
+			log.Error("Error during shutdown", slog.String("error", err.Error()))
 			os.Exit(1)
 		}
-		log.Info("Shutdown complete", map[string]interface{}{})
+		log.Info("Shutdown complete")
 	case err := <-errCh:
-		log.Error("Server failed", map[string]interface{}{
-			"error": err.Error(),
-		})
+		log.Error("Server failed", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 }

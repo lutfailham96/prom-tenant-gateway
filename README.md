@@ -159,9 +159,9 @@ See `deploy/ingress/` for old nginx Ingress manifests.
 │   ├── auth/token_store.go     # Token storage & validation
 │   ├── config/config.go        # Configuration
 │   ├── handler/handler.go      # HTTP handlers
-│   ├── logger/logger.go        # JSON logger
-│   ├── metrics/metrics.go      # Prometheus metrics
-│   └── middleware/middleware.go # Rate limiting, request logging
+│   ├── logger/logger.go        # slog JSON logger
+│   ├── metrics/metrics.go      # Prometheus metrics (client_golang, own registry)
+│   └── middleware/middleware.go # Rate limiting, request log + latency metrics
 ├── deploy/
 │   ├── kubernetes/             # Deployment, Service, HPA, PDB, ...
 │   └── gateway-api/            # Kubernetes Gateway API manifests
@@ -201,13 +201,47 @@ image is only built and pushed when both the test and lint jobs pass.
 
 ## Metrics (Prometheus)
 
-```
-go_grafana_auth_requests_total              # Total requests
-go_grafana_auth_requests_success_total      # Successful validations
-go_grafana_auth_requests_failed_total       # Failed validations
-go_grafana_auth_uptime_seconds              # Service uptime
-go_grafana_auth_tokens_configured           # Number of valid tokens
-```
+Served on `/metrics` by `prometheus/client_golang`:
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `prom_tenant_gateway_auth_requests_total` | counter | `result`, `tenant` | Token validations. `result` is `success`, `invalid_token`, `invalid_header`, `missing_header` or `rate_limited`; `tenant` is set only for `success` |
+| `prom_tenant_gateway_http_request_duration_seconds` | histogram | `route`, `method`, `code` | Request latency (buckets 100µs–1s). Unknown paths use `route="unmatched"` |
+| `prom_tenant_gateway_tokens_configured` | gauge | — | Number of configured tokens |
+| `prom_tenant_gateway_build_info` | gauge | `version`, `goversion` | Always 1 |
+| `go_*`, `process_*` | — | — | Go runtime and process metrics (incl. `process_start_time_seconds`) |
+
+### Migrating from the old metric names
+
+The previous hand-written `go_grafana_auth_*` metrics were removed. Equivalent queries:
+
+| Old | New |
+|-----|-----|
+| `go_grafana_auth_requests_total` | `sum(prom_tenant_gateway_auth_requests_total)` |
+| `go_grafana_auth_requests_success_total` | `sum(prom_tenant_gateway_auth_requests_total{result="success"})` |
+| `go_grafana_auth_requests_failed_total` | `sum(prom_tenant_gateway_auth_requests_total{result!="success"})` |
+| `go_grafana_auth_uptime_seconds` | `time() - process_start_time_seconds` |
+| `go_grafana_auth_tokens_configured` | `prom_tenant_gateway_tokens_configured` |
+
+The old `failed` counter also counted unrelated errors (404s, oversized bodies) and
+rate-limited requests without counting them in `total`; the new counter only
+counts `/validate-token` outcomes, so `failed` can no longer exceed `total`.
+
+## Logging
+
+JSON lines on stdout (`log/slog`) with `timestamp`, `level`, `message`, `service`,
+`version`. Every request produces one `HTTP request` line (`method`, `path`,
+`status`, `latency_ms`, `ip`, `user_agent`, plus `auth_result` and `tenant_id` for
+`/validate-token`), except `/healthz` and `/metrics`. The level follows the status:
+
+| Status | Level |
+|--------|-------|
+| 2xx / 3xx | `debug` (successful auth traffic is high-volume; hidden at the default `info`) |
+| 401, 403, 429 | `warn` |
+| other 4xx | `info` |
+| 5xx | `error` (plus a `Request error` line with the cause) |
+
+Set `LOG_LEVEL=debug` to also log successful requests.
 
 ## Building
 

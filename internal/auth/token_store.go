@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
+	"slices"
 	"strings"
-
-	"github.com/lutfailham96/prom-tenant-gateway/internal/logger"
 )
 
 const (
@@ -28,10 +28,10 @@ const (
 
 type TokenStore struct {
 	tokens map[string]string
-	logger *logger.Logger
+	logger *slog.Logger
 }
 
-func NewTokenStore(log *logger.Logger) *TokenStore {
+func NewTokenStore(log *slog.Logger) *TokenStore {
 	return &TokenStore{
 		tokens: make(map[string]string),
 		logger: log,
@@ -107,9 +107,7 @@ func (s *TokenStore) LoadFromEnv() error {
 				s.warnIfWeak(token, tenant, "VALID_TOKENS_JSON")
 				loaded++
 			}
-			s.logger.Info("Loaded tokens from VALID_TOKENS_JSON (legacy)", map[string]interface{}{
-				"count": loaded,
-			})
+			s.logger.Info("Loaded tokens from VALID_TOKENS_JSON (legacy)", slog.Int("count", loaded))
 		}
 	}
 
@@ -124,15 +122,10 @@ func (s *TokenStore) LoadFromEnv() error {
 			continue
 		}
 		s.warnIfWeak(value, tenantID, key)
-		s.logger.Info("Loaded token for tenant", map[string]interface{}{
-			"tenant_id": tenantID,
-			"source":    key,
-		})
+		s.logger.Info("Loaded token for tenant", slog.String("tenant_id", tenantID), slog.String("source", key))
 	}
 
-	s.logger.Info("Loaded tenant tokens", map[string]interface{}{
-		"count": len(s.tokens),
-	})
+	s.logger.Info("Loaded tenant tokens", slog.Int("count", len(s.tokens)))
 	return errors.Join(errs...)
 }
 
@@ -140,12 +133,12 @@ func (s *TokenStore) LoadFromEnv() error {
 // MinRecommendedTokenLength.
 func (s *TokenStore) warnIfWeak(token, tenantID, source string) {
 	if n := len(strings.TrimSpace(token)); n < MinRecommendedTokenLength {
-		s.logger.Warn("Token shorter than recommended length", map[string]interface{}{
-			"tenant_id":  tenantID,
-			"source":     source,
-			"length":     n,
-			"min_length": MinRecommendedTokenLength,
-		})
+		s.logger.Warn("Token shorter than recommended length",
+			slog.String("tenant_id", tenantID),
+			slog.String("source", source),
+			slog.Int("length", n),
+			slog.Int("min_length", MinRecommendedTokenLength),
+		)
 	}
 }
 
@@ -164,6 +157,20 @@ func (s *TokenStore) Validate(token string) (tenantID string, ok bool) {
 
 func (s *TokenStore) Count() int {
 	return len(s.tokens)
+}
+
+// Tenants returns the distinct tenant IDs, sorted.
+func (s *TokenStore) Tenants() []string {
+	seen := make(map[string]struct{}, len(s.tokens))
+	out := make([]string, 0, len(s.tokens))
+	for _, tenant := range s.tokens {
+		if _, ok := seen[tenant]; !ok {
+			seen[tenant] = struct{}{}
+			out = append(out, tenant)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // Tokens returns a copy of the token → tenant mapping.

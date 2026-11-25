@@ -1,10 +1,11 @@
 package handler_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -18,26 +19,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func discardLogger() *logger.Logger {
-	return &logger.Logger{Logger: log.New(io.Discard, "", 0), Level: "error"}
-}
-
 // newApp wires the handlers with the given token → tenant pairs.
-func newApp(t *testing.T, tokens map[string]string) (*fiber.App, *metrics.Metrics) {
+func newApp(t *testing.T, tokens map[string]string) *fiber.App {
 	t.Helper()
-	l := discardLogger()
-	m := metrics.New()
+	l := logger.Discard()
+	m := metrics.New("test")
 	ts := auth.NewTokenStore(l)
 	for token, tenant := range tokens {
 		require.NoError(t, ts.Add(token, tenant))
 	}
-	h := handler.New(ts, l, m)
+	m.SetTenants(ts.Tenants(), ts.Count())
+	h := handler.New(ts, m)
 
-	app := fiber.New(fiber.Config{ErrorHandler: handler.CustomErrorHandler(l, m)})
+	app := fiber.New(fiber.Config{ErrorHandler: handler.CustomErrorHandler(l)})
 	app.Get("/validate-token", h.ValidateToken)
 	app.Get("/healthz", h.Health)
 	app.Get("/metrics", h.Metrics)
-	return app, m
+	return app
 }
 
 func validate(t *testing.T, app *fiber.App, authorization string) *http.Response {
@@ -58,52 +56,89 @@ func errorBody(t *testing.T, resp *http.Response) string {
 	return body["error"]
 }
 
+func scrape(t *testing.T, app *fiber.App) string {
+	t.Helper()
+	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/metrics", nil), -1)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	raw, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return string(raw)
+}
+
 func TestValidateToken_Valid(t *testing.T) {
-	app, m := newApp(t, map[string]string{"test-token": "test-tenant"})
+	app := newApp(t, map[string]string{"test-token": "test-tenant"})
 
 	resp := validate(t, app, "Bearer test-token")
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, "test-tenant", resp.Header.Get("X-Scope-OrgID"))
-	total, success, failed, _ := m.Get()
-	assert.Equal(t, [3]uint64{1, 1, 0}, [3]uint64{total, success, failed})
+	assert.Equal(t, "test-tenant", resp.Header.Get(handler.HeaderScopeOrgID))
+	assert.Contains(t, scrape(t, app), `prom_tenant_gateway_auth_requests_total{result="success",tenant="test-tenant"} 1`)
 }
 
 func TestValidateToken_CaseInsensitiveBearerAndWhitespace(t *testing.T) {
-	app, _ := newApp(t, map[string]string{"test-token": "tenant-test"})
+	app := newApp(t, map[string]string{"test-token": "tenant-test"})
 
 	resp := validate(t, app, "bearer   test-token  ")
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, "tenant-test", resp.Header.Get("X-Scope-OrgID"))
+	assert.Equal(t, "tenant-test", resp.Header.Get(handler.HeaderScopeOrgID))
 }
 
 func TestValidateToken_Rejected(t *testing.T) {
-	app, _ := newApp(t, map[string]string{"valid-token": "tenant-1"})
-
 	tests := []struct {
-		name, authorization, wantError string
+		name, authorization, wantError, wantResult string
 	}{
-		{"invalid token", "Bearer invalid-token", "invalid token"},
-		{"missing header", "", "missing Authorization header"},
-		{"basic scheme", "Basic invalid-format", "invalid Authorization header"},
-		{"bearer without token", "Bearer", "invalid Authorization header"},
-		{"bearer with only spaces", "Bearer    ", "invalid Authorization header"},
-		{"truncated scheme", "Bear", "invalid Authorization header"},
+		{"invalid token", "Bearer invalid-token", "invalid token", metrics.ResultInvalidToken},
+		{"missing header", "", "missing Authorization header", metrics.ResultMissingHeader},
+		{"basic scheme", "Basic invalid-format", "invalid Authorization header", metrics.ResultInvalidHeader},
+		{"bearer without token", "Bearer", "invalid Authorization header", metrics.ResultInvalidHeader},
+		{"bearer with only spaces", "Bearer    ", "invalid Authorization header", metrics.ResultInvalidHeader},
+		{"truncated scheme", "Bear", "invalid Authorization header", metrics.ResultInvalidHeader},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			app := newApp(t, map[string]string{"valid-token": "tenant-1"})
+
 			resp := validate(t, app, tt.authorization)
 
 			assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-			assert.Empty(t, resp.Header.Get("X-Scope-OrgID"))
+			assert.Equal(t, "application/json; charset=utf-8", resp.Header.Get("Content-Type"))
+			assert.Empty(t, resp.Header.Get(handler.HeaderScopeOrgID))
 			assert.Equal(t, tt.wantError, errorBody(t, resp))
+			assert.Contains(t, scrape(t, app), `prom_tenant_gateway_auth_requests_total{result="`+tt.wantResult+`",tenant=""} 1`)
 		})
 	}
 }
 
+// The handler stores the auth result for the request log.
+func TestValidateToken_SetsAuthResultLocal(t *testing.T) {
+	ts := auth.NewTokenStore(logger.Discard())
+	require.NoError(t, ts.Add("good", "a"))
+	h := handler.New(ts, metrics.New("test"))
+
+	var got []string
+	app := fiber.New()
+	app.Use(func(c *fiber.Ctx) error {
+		err := c.Next()
+		result, _ := c.Locals(metrics.LocalsAuthResult).(string)
+		got = append(got, result)
+		return err
+	})
+	app.Get("/validate-token", h.ValidateToken)
+
+	validate(t, app, "Bearer good")
+	validate(t, app, "Bearer bad")
+	validate(t, app, "")
+	validate(t, app, "Basic x")
+
+	assert.Equal(t, []string{
+		metrics.ResultSuccess, metrics.ResultInvalidToken, metrics.ResultMissingHeader, metrics.ResultInvalidHeader,
+	}, got)
+}
+
 func TestHealth(t *testing.T) {
-	app, _ := newApp(t, nil)
+	app := newApp(t, nil)
 
 	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/healthz", nil), -1)
 	require.NoError(t, err)
@@ -117,26 +152,22 @@ func TestHealth(t *testing.T) {
 	assert.Equal(t, "1.0.0", body["version"])
 }
 
-func TestMetrics(t *testing.T) {
-	app, _ := newApp(t, map[string]string{"token-1": "tenant-1", "token-2": "tenant-2"})
+func TestMetrics_Exposition(t *testing.T) {
+	app := newApp(t, map[string]string{"token-1": "tenant-1", "token-2": "tenant-2"})
 
-	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/metrics", nil), -1)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, "text/plain; version=0.0.4; charset=utf-8", resp.Header.Get("Content-Type"))
+	out := scrape(t, app)
 
-	raw, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	output := string(raw)
-	assert.Contains(t, output, "go_grafana_auth_requests_total")
-	assert.Contains(t, output, "go_grafana_auth_requests_success_total")
-	assert.Contains(t, output, "go_grafana_auth_requests_failed_total")
-	assert.Contains(t, output, "go_grafana_auth_uptime_seconds")
-	assert.Contains(t, output, "go_grafana_auth_tokens_configured 2")
+	assert.Contains(t, out, "prom_tenant_gateway_tokens_configured 2")
+	assert.Contains(t, out, `prom_tenant_gateway_auth_requests_total{result="success",tenant="tenant-1"} 0`)
+	assert.Contains(t, out, "prom_tenant_gateway_build_info")
+	assert.Contains(t, out, "process_start_time_seconds")
+	assert.NotContains(t, out, "go_grafana_auth_")
 }
 
 func TestCustomErrorHandler(t *testing.T) {
-	app := fiber.New(fiber.Config{ErrorHandler: handler.CustomErrorHandler(discardLogger(), metrics.New())})
+	var buf bytes.Buffer
+	l := logger.New(&buf, "test", "1.0.0", slog.LevelInfo)
+	app := fiber.New(fiber.Config{ErrorHandler: handler.CustomErrorHandler(l)})
 	app.Get("/bad", func(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "bad request")
 	})
@@ -144,17 +175,22 @@ func TestCustomErrorHandler(t *testing.T) {
 		return errors.New("dial tcp 10.0.0.5:5432: connection refused")
 	})
 
-	t.Run("fiber error keeps status and message", func(t *testing.T) {
+	t.Run("fiber error keeps status and message, not logged at info", func(t *testing.T) {
+		buf.Reset()
 		resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/bad", nil), -1)
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 		assert.Equal(t, "bad request", errorBody(t, resp))
+		assert.Zero(t, buf.Len(), "4xx is logged at debug only")
 	})
 
-	t.Run("internal error is hidden", func(t *testing.T) {
+	t.Run("internal error is hidden from client but logged", func(t *testing.T) {
+		buf.Reset()
 		resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/boom", nil), -1)
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 		assert.Equal(t, "internal server error", errorBody(t, resp))
+		assert.Contains(t, buf.String(), `"level":"error"`)
+		assert.Contains(t, buf.String(), "connection refused")
 	})
 }

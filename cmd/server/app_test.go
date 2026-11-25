@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -34,10 +33,12 @@ func testConfig() config.Config {
 
 func newTestApp(t *testing.T, cfg config.Config) *fiber.App {
 	t.Helper()
-	l := &logger.Logger{Logger: log.New(io.Discard, "", 0), Level: "error"}
+	l := logger.Discard()
 	ts := auth.NewTokenStore(l)
 	require.NoError(t, ts.Add("good-token", "tenant-a"))
-	return newApp(cfg, l, metrics.New(), ts)
+	m := metrics.New("test")
+	m.SetTenants(ts.Tenants(), ts.Count())
+	return newApp(cfg, l, m, ts)
 }
 
 func do(t *testing.T, app *fiber.App, req *http.Request) *http.Response {
