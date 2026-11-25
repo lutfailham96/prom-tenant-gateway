@@ -7,7 +7,7 @@ metadata:
     nginx.ingress.kubernetes.io/auth-snippet: |
       proxy_set_header Authorization $http_authorization;
       proxy_set_header X-Original-URI $request_uri;
-    nginx.ingress.kubernetes.io/auth-url: http://prom-tenant-gateway-svc.monitoring.svc.cluster.local:80/validate-token
+    nginx.ingress.kubernetes.io/auth-url: http://prom-tenant-gateway-svc.mimir.svc.cluster.local:80/validate-token
     nginx.ingress.kubernetes.io/configuration-snippet: |
       proxy_set_header X-Scope-OrgID $upstream_http_x_scope_orgid;
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"

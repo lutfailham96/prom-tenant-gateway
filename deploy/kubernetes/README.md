@@ -12,7 +12,7 @@ kustomize build deploy/kubernetes
 kubectl apply -k deploy/kubernetes
 
 # Check status
-kubectl -n monitoring get all -l app=prom-tenant-gateway
+kubectl -n mimir get all -l app=prom-tenant-gateway
 ```
 
 ## Required: Update Secrets
@@ -37,7 +37,7 @@ kustomize build deploy/kubernetes --enable-alpha-plugins \
 
 | File | Description |
 |------|-------------|
-| `00-namespace.yaml` | `monitoring` namespace |
+| `00-namespace.yaml` | `mimir` namespace |
 | `01-configmap.yaml` | App config (rate limits, log level, etc.) |
 | `02-secret.yaml` | **Tokens** - MUST UPDATE BEFORE APPLY |
 | `03-deployment.yaml` | 3 replicas, probes, resources, security |
@@ -82,7 +82,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: prom-tenant-gateway
-  namespace: monitoring
+  namespace: mimir
 spec:
   selector:
     matchLabels:
@@ -105,11 +105,11 @@ For Mimir multi-tenant, use the Gateway API manifests in `deploy/gateway-api/`:
 
 ```bash
 # Health check
-kubectl -n monitoring port-forward svc/prom-tenant-gateway-svc 8080:80
+kubectl -n mimir port-forward svc/prom-tenant-gateway-svc 8080:80
 curl localhost:8080/healthz
 
 # Token validation
-curl -H "Authorization: Bearer <token>" localhost:8080/validate-token
+curl -H "Authorization: Bearer ***" localhost:8080/validate-token
 
 # Metrics
 curl localhost:8080/metrics
@@ -118,6 +118,6 @@ curl localhost:8080/metrics
 ## Rollback
 
 ```bash
-kubectl -n monitoring rollout undo deployment/prom-tenant-gateway
-kubectl -n monitoring rollout status deployment/prom-tenant-gateway
+kubectl -n mimir rollout undo deployment/prom-tenant-gateway
+kubectl -n mimir rollout status deployment/prom-tenant-gateway
 ```

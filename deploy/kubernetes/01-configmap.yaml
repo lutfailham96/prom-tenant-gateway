@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: prom-tenant-gateway-config
-  namespace: monitoring
+  namespace: mimir
   labels:
     app: prom-tenant-gateway
     app.kubernetes.io/managed-by: kustomize

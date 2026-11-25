@@ -2,7 +2,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: prom-tenant-gateway-pdb
-  namespace: monitoring
+  namespace: mimir
   labels:
     app: prom-tenant-gateway
     app.kubernetes.io/managed-by: kustomize
