@@ -1,80 +1,77 @@
+// Package logger builds the service's structured JSON logger on top of
+// log/slog. The output schema is kept compatible with the previous custom
+// logger: timestamp (UTC, RFC3339Nano), level (lowercase), message, service,
+// version, followed by call-site attributes.
 package logger
 
 import (
-	"encoding/json"
-	"log"
-	"os"
+	"io"
+	"log/slog"
 	"strings"
 	"time"
 )
 
-type Logger struct {
-	*log.Logger
-	Service string
-	Version string
-	Level   string
-}
-
-func parseLevel(level string) int {
-	switch strings.ToLower(level) {
+// ParseLevel maps a LOG_LEVEL value to a slog level. Unknown values default
+// to info.
+func ParseLevel(level string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "debug":
-		return 0
-	case "info":
-		return 1
+		return slog.LevelDebug
 	case "warn", "warning":
-		return 2
+		return slog.LevelWarn
 	case "error":
-		return 3
+		return slog.LevelError
 	default:
-		return 1
+		return slog.LevelInfo
 	}
 }
 
-func New(service, version string) *Logger {
-	return &Logger{
-		Logger:  log.New(os.Stdout, "", 0),
-		Service: service,
-		Version: version,
-		Level:   "info",
+// New returns a JSON logger writing to w at the given level, with service
+// and version attached to every record.
+func New(w io.Writer, service, version string, level slog.Level) *slog.Logger {
+	h := slog.NewJSONHandler(w, &slog.HandlerOptions{
+		Level:       level,
+		ReplaceAttr: replaceAttr,
+	})
+	return slog.New(h).With(
+		slog.String("service", service),
+		slog.String("version", version),
+	)
+}
+
+// Discard returns a logger that drops everything; intended for tests.
+func Discard() *slog.Logger {
+	return slog.New(slog.DiscardHandler)
+}
+
+func replaceAttr(groups []string, a slog.Attr) slog.Attr {
+	if len(groups) > 0 {
+		return a
 	}
-}
-
-func (l *Logger) SetLevel(level string) {
-	if level != "" {
-		l.Level = strings.ToLower(level)
+	switch a.Key {
+	case slog.TimeKey:
+		return slog.String("timestamp", a.Value.Time().UTC().Format(time.RFC3339Nano))
+	case slog.LevelKey:
+		return slog.String("level", levelName(a.Value.Any()))
+	case slog.MessageKey:
+		a.Key = "message"
 	}
+	return a
 }
 
-func (l *Logger) log(level, message string, fields map[string]interface{}) {
-	if parseLevel(level) < parseLevel(l.Level) {
-		return
+func levelName(v any) string {
+	level, ok := v.(slog.Level)
+	if !ok {
+		return "info"
 	}
-	entry := map[string]interface{}{
-		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
-		"level":     level,
-		"message":   message,
-		"service":   l.Service,
-		"version":   l.Version,
+	switch {
+	case level < slog.LevelInfo:
+		return "debug"
+	case level < slog.LevelWarn:
+		return "info"
+	case level < slog.LevelError:
+		return "warn"
+	default:
+		return "error"
 	}
-	for k, v := range fields {
-		entry[k] = v
-	}
-	data, _ := json.Marshal(entry)
-	l.Println(string(data))
-}
-
-func (l *Logger) Info(message string, fields map[string]interface{}) {
-	l.log("info", message, fields)
-}
-
-func (l *Logger) Warn(message string, fields map[string]interface{}) {
-	l.log("warn", message, fields)
-}
-
-func (l *Logger) Error(message string, fields map[string]interface{}) {
-	l.log("error", message, fields)
-}
-
-func (l *Logger) Debug(message string, fields map[string]interface{}) {
-	l.log("debug", message, fields)
 }

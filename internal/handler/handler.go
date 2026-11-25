@@ -2,75 +2,77 @@ package handler
 
 import (
 	"errors"
+	"log/slog"
 	"strconv"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/adaptor"
 	"github.com/lutfailham96/prom-tenant-gateway/internal/auth"
-	"github.com/lutfailham96/prom-tenant-gateway/internal/logger"
 	"github.com/lutfailham96/prom-tenant-gateway/internal/metrics"
 )
 
+// HeaderScopeOrgID carries the authenticated tenant to Mimir.
+const HeaderScopeOrgID = "X-Scope-OrgID"
+
+// Pre-encoded error bodies: the 401 path is hit by every failed attempt, so
+// avoid JSON encoding per request.
+var (
+	bodyMissingHeader = []byte(`{"error":"missing Authorization header"}`)
+	bodyInvalidHeader = []byte(`{"error":"invalid Authorization header"}`)
+	bodyInvalidToken  = []byte(`{"error":"invalid token"}`)
+)
+
 type Handler struct {
-	tokenStore *auth.TokenStore
-	logger     *logger.Logger
-	metrics    *metrics.Metrics
+	tokenStore     *auth.TokenStore
+	metrics        *metrics.Metrics
+	metricsHandler fiber.Handler
 }
 
-func New(tokenStore *auth.TokenStore, log *logger.Logger, m *metrics.Metrics) *Handler {
+func New(tokenStore *auth.TokenStore, m *metrics.Metrics) *Handler {
 	return &Handler{
-		tokenStore: tokenStore,
-		logger:     log,
-		metrics:    m,
+		tokenStore:     tokenStore,
+		metrics:        m,
+		metricsHandler: adaptor.HTTPHandler(m.Handler()),
 	}
 }
 
+// ValidateToken authenticates "Authorization: Bearer <token>" and, on
+// success, returns the tenant in X-Scope-OrgID. It does not log: the request
+// observer middleware writes one log line per request and reads the result
+// from c.Locals(metrics.LocalsAuthResult).
 func (h *Handler) ValidateToken(c *fiber.Ctx) error {
-	h.metrics.IncTotal()
-
-	authHeader := c.Get("Authorization")
+	authHeader := c.Get(fiber.HeaderAuthorization)
 	if authHeader == "" {
-		h.metrics.IncFailed()
-		h.logger.Warn("Missing Authorization header", map[string]interface{}{
-			"ip":     c.IP(),
-			"path":   c.Path(),
-			"method": c.Method(),
-		})
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "missing Authorization header"})
+		h.metrics.AuthFailure(metrics.ResultMissingHeader)
+		c.Locals(metrics.LocalsAuthResult, metrics.ResultMissingHeader)
+		return unauthorized(c, bodyMissingHeader)
 	}
 
 	token, ok := bearerToken(authHeader)
 	if !ok {
-		h.metrics.IncFailed()
-		h.logger.Warn("Invalid Authorization header format", map[string]interface{}{
-			"ip":     c.IP(),
-			"path":   c.Path(),
-			"method": c.Method(),
-		})
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid Authorization header"})
+		h.metrics.AuthFailure(metrics.ResultInvalidHeader)
+		c.Locals(metrics.LocalsAuthResult, metrics.ResultInvalidHeader)
+		return unauthorized(c, bodyInvalidHeader)
 	}
 
 	tenantID, found := h.tokenStore.Validate(token)
 	if !found {
-		h.metrics.IncFailed()
-		h.logger.Warn("Invalid token attempt", map[string]interface{}{
-			"ip":     c.IP(),
-			"path":   c.Path(),
-			"method": c.Method(),
-		})
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid token"})
+		h.metrics.AuthFailure(metrics.ResultInvalidToken)
+		c.Locals(metrics.LocalsAuthResult, metrics.ResultInvalidToken)
+		return unauthorized(c, bodyInvalidToken)
 	}
 
-	h.metrics.IncSuccess()
-	c.Set("X-Scope-OrgID", tenantID)
-	h.logger.Debug("Authenticated tenant", map[string]interface{}{
-		"tenant_id": tenantID,
-		"ip":        c.IP(),
-		"path":      c.Path(),
-		"method":    c.Method(),
-	})
-
+	h.metrics.AuthSuccess(tenantID)
+	c.Locals(metrics.LocalsAuthResult, metrics.ResultSuccess)
+	c.Set(HeaderScopeOrgID, tenantID)
 	return c.SendStatus(fiber.StatusOK)
+}
+
+func unauthorized(c *fiber.Ctx, body []byte) error {
+	c.Status(fiber.StatusUnauthorized)
+	c.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSONCharsetUTF8)
+	return c.Send(body)
 }
 
 // bearerToken extracts the token from an "Authorization: Bearer <token>"
@@ -85,59 +87,43 @@ func bearerToken(header string) (string, bool) {
 }
 
 func (h *Handler) Health(c *fiber.Ctx) error {
-	_, _, _, uptimeSec := h.metrics.Get()
 	return c.JSON(fiber.Map{
 		"status":    "healthy",
-		"uptime":    strconv.FormatFloat(uptimeSec, 'f', 2, 64) + "s",
+		"uptime":    strconv.FormatFloat(h.metrics.Uptime().Seconds(), 'f', 2, 64) + "s",
 		"timestamp": c.Context().Time().UTC().Format("2006-01-02T15:04:05Z"),
 		"version":   "1.0.0",
 	})
 }
 
+// Metrics serves Prometheus metrics (gateway, Go runtime and process).
 func (h *Handler) Metrics(c *fiber.Ctx) error {
-	total, success, failed, uptimeSec := h.metrics.Get()
-	tokenCount := h.tokenStore.Count()
-
-	metricsOutput := `# HELP go_grafana_auth_requests_total Total number of requests
-# TYPE go_grafana_auth_requests_total counter
-go_grafana_auth_requests_total ` + strconv.FormatUint(total, 10) + `
-# HELP go_grafana_auth_requests_success_total Total number of successful requests
-# TYPE go_grafana_auth_requests_success_total counter
-go_grafana_auth_requests_success_total ` + strconv.FormatUint(success, 10) + `
-# HELP go_grafana_auth_requests_failed_total Total number of failed requests
-# TYPE go_grafana_auth_requests_failed_total counter
-go_grafana_auth_requests_failed_total ` + strconv.FormatUint(failed, 10) + `
-# HELP go_grafana_auth_uptime_seconds Service uptime in seconds
-# TYPE go_grafana_auth_uptime_seconds gauge
-go_grafana_auth_uptime_seconds ` + strconv.FormatFloat(uptimeSec, 'f', 2, 64) + `
-# HELP go_grafana_auth_tokens_configured Number of configured valid tokens
-# TYPE go_grafana_auth_tokens_configured gauge
-go_grafana_auth_tokens_configured ` + strconv.Itoa(tokenCount) + `
-`
-
-	c.Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	return c.SendString(metricsOutput)
+	return h.metricsHandler(c)
 }
 
-func CustomErrorHandler(log *logger.Logger, m *metrics.Metrics) fiber.ErrorHandler {
+// CustomErrorHandler turns errors into JSON responses. Only *fiber.Error
+// messages are shown to clients; anything else may carry internal details and
+// is replaced with a generic message. 5xx errors are logged with their cause;
+// other errors are already covered by the request log line.
+func CustomErrorHandler(log *slog.Logger) fiber.ErrorHandler {
 	return func(c *fiber.Ctx, err error) error {
-		m.IncFailed()
 		code := fiber.StatusInternalServerError
-		// Only *fiber.Error messages are meant for clients; anything else may
-		// carry internal details and is replaced with a generic message.
 		message := "internal server error"
 		var fe *fiber.Error
 		if errors.As(err, &fe) {
 			code = fe.Code
 			message = fe.Message
 		}
-		log.Error("Request error", map[string]interface{}{
-			"path":   c.Path(),
-			"method": c.Method(),
-			"ip":     c.IP(),
-			"error":  err.Error(),
-			"status": code,
-		})
+
+		level := slog.LevelDebug
+		if code >= fiber.StatusInternalServerError {
+			level = slog.LevelError
+		}
+		log.LogAttrs(c.UserContext(), level, "Request error",
+			slog.String("method", c.Method()),
+			slog.String("path", c.Path()),
+			slog.Int("status", code),
+			slog.String("error", err.Error()),
+		)
 		return c.Status(code).JSON(fiber.Map{"error": message})
 	}
 }

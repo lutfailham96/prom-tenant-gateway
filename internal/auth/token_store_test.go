@@ -2,8 +2,7 @@ package auth_test
 
 import (
 	"bytes"
-	"io"
-	"log"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
@@ -14,8 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func discardLogger() *logger.Logger {
-	return &logger.Logger{Logger: log.New(io.Discard, "", 0), Level: "error"}
+func discardLogger() *slog.Logger {
+	return logger.Discard()
 }
 
 // clearTokenEnv blanks every token variable inherited from the environment so
@@ -151,7 +150,7 @@ func TestLoadFromEnv_WarnsOnShortToken(t *testing.T) {
 	t.Setenv("TENANT_LONG_TOKEN", strings.Repeat("x", auth.MinRecommendedTokenLength))
 
 	var buf bytes.Buffer
-	ts := auth.NewTokenStore(&logger.Logger{Logger: log.New(&buf, "", 0), Level: "warn"})
+	ts := auth.NewTokenStore(logger.New(&buf, "test", "1.0.0", slog.LevelWarn))
 	require.NoError(t, ts.LoadFromEnv(), "short tokens are accepted, only warned about")
 
 	out := buf.String()
@@ -207,4 +206,13 @@ func TestExtractTenantIDFromEnvVar(t *testing.T) {
 			assert.Equal(t, want, auth.ExtractTenantIDFromEnvVar(envVar))
 		})
 	}
+}
+
+func TestTenants_DistinctAndSorted(t *testing.T) {
+	ts := auth.NewTokenStore(discardLogger())
+	require.NoError(t, ts.Add("t1", "zeta"))
+	require.NoError(t, ts.Add("t2", "alpha"))
+	require.NoError(t, ts.Add("t3", "zeta"))
+
+	assert.Equal(t, []string{"alpha", "zeta"}, ts.Tenants())
 }
