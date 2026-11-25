@@ -1,13 +1,12 @@
-FROM golang:1.27-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /app
-ENV CGO_ENABLED=0 \
-    GOOS=linux \
-    GOARCH=amd64
+ENV CGO_ENABLED=0
 COPY go.mod go.sum* ./
 RUN go mod download
 COPY . .
-RUN go mod tidy
-RUN go build -ldflags="-s -w" -o main ./cmd/server
+RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags="-s -w" -o main ./cmd/server
 
 # Test stage
 FROM builder AS tester

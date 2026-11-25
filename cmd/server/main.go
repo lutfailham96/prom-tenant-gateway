@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/monitor"
@@ -25,6 +26,7 @@ const (
 func main() {
 	log := logger.New(serviceName, version)
 	cfg := config.Load()
+	log.SetLevel(cfg.LogLevel)
 	m := metrics.New()
 	tokenStore := auth.NewTokenStore(log)
 
@@ -42,6 +44,10 @@ func main() {
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: true,
 		ErrorHandler:          handler.CustomErrorHandler(log, m),
+		ProxyHeader:           fiber.HeaderXForwardedFor,
+		ReadTimeout:           10 * time.Second,
+		WriteTimeout:          10 * time.Second,
+		IdleTimeout:           120 * time.Second,
 	})
 
 	app.Use(recover.New())
@@ -90,7 +96,7 @@ func main() {
 
 	select {
 	case <-ctx.Done():
-		if err := app.Shutdown(); err != nil {
+		if err := app.ShutdownWithTimeout(10 * time.Second); err != nil {
 			log.Error("Error during shutdown", map[string]interface{}{
 				"error": err.Error(),
 			})

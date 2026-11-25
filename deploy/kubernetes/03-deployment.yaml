@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: prom-tenant-gateway
-  namespace: monitoring
+  namespace: mimir
   labels:
     app: prom-tenant-gateway
     app.kubernetes.io/managed-by: kustomize
@@ -28,6 +28,8 @@ spec:
         runAsUser: 10001
         runAsGroup: 10001
         fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: prom-tenant-gateway
         image: lutfailham/prom-tenant-gateway:latest

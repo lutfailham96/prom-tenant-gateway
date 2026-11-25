@@ -2,7 +2,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: prom-tenant-gateway-hpa
-  namespace: monitoring
+  namespace: mimir
   labels:
     app: prom-tenant-gateway
     app.kubernetes.io/managed-by: kustomize

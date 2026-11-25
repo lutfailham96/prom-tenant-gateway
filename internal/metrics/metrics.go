@@ -6,9 +6,9 @@ import (
 )
 
 type Metrics struct {
-	RequestsTotal   uint64
-	RequestsSuccess uint64
-	RequestsFailed  uint64
+	RequestsTotal   atomic.Uint64
+	RequestsSuccess atomic.Uint64
+	RequestsFailed  atomic.Uint64
 	StartTime       time.Time
 }
 
@@ -19,21 +19,21 @@ func New() *Metrics {
 }
 
 func (m *Metrics) IncTotal() {
-	atomic.AddUint64(&m.RequestsTotal, 1)
+	m.RequestsTotal.Add(1)
 }
 
 func (m *Metrics) IncSuccess() {
-	atomic.AddUint64(&m.RequestsSuccess, 1)
+	m.RequestsSuccess.Add(1)
 }
 
 func (m *Metrics) IncFailed() {
-	atomic.AddUint64(&m.RequestsFailed, 1)
+	m.RequestsFailed.Add(1)
 }
 
 func (m *Metrics) Get() (total, success, failed uint64, uptimeSec float64) {
-	total = atomic.LoadUint64(&m.RequestsTotal)
-	success = atomic.LoadUint64(&m.RequestsSuccess)
-	failed = atomic.LoadUint64(&m.RequestsFailed)
+	total = m.RequestsTotal.Load()
+	success = m.RequestsSuccess.Load()
+	failed = m.RequestsFailed.Load()
 	uptimeSec = time.Since(m.StartTime).Seconds()
 	return
 }

@@ -38,8 +38,10 @@ func (h *Handler) ValidateToken(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "missing Authorization header"})
 	}
 
-	token, ok := strings.CutPrefix(authHeader, "Bearer ")
-	if !ok {
+	var token string
+	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+		token = strings.TrimSpace(authHeader[7:])
+	} else {
 		h.metrics.IncFailed()
 		h.logger.Warn("Invalid Authorization header format", map[string]interface{}{
 			"ip":     c.IP(),
@@ -62,7 +64,7 @@ func (h *Handler) ValidateToken(c *fiber.Ctx) error {
 
 	h.metrics.IncSuccess()
 	c.Set("X-Scope-OrgID", tenantID)
-	h.logger.Info("Authenticated tenant", map[string]interface{}{
+	h.logger.Debug("Authenticated tenant", map[string]interface{}{
 		"tenant_id": tenantID,
 		"ip":        c.IP(),
 		"path":      c.Path(),

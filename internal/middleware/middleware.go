@@ -11,17 +11,21 @@ import (
 
 func RequestLogger(log *logger.Logger) fiber.Handler {
 	return func(c *fiber.Ctx) error {
+		path := c.Path()
+		if path == "/healthz" || path == "/metrics" {
+			return c.Next()
+		}
 		start := time.Now()
 		err := c.Next()
 		latency := time.Since(start)
 		log.Info("HTTP request", map[string]interface{}{
-			"method":      c.Method(),
-			"path":        c.Path(),
-			"status":      c.Response().StatusCode(),
-			"latency":     latency.String(),
-			"latency_ms":  latency.Milliseconds(),
-			"ip":          c.IP(),
-			"user_agent":  c.Get("User-Agent"),
+			"method":     c.Method(),
+			"path":       path,
+			"status":     c.Response().StatusCode(),
+			"latency":    latency.String(),
+			"latency_ms": latency.Milliseconds(),
+			"ip":         c.IP(),
+			"user_agent": c.Get("User-Agent"),
 		})
 		return err
 	}
