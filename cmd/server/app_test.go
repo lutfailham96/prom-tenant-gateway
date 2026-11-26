@@ -38,7 +38,9 @@ func newTestApp(t *testing.T, cfg config.Config) *fiber.App {
 	require.NoError(t, ts.Add("good-token", "tenant-a"))
 	m := metrics.New("test")
 	m.SetTenants(ts.Tenants(), ts.Count())
-	return newApp(cfg, l, m, ts)
+	app, err := newApp(cfg, l, m, ts)
+	require.NoError(t, err)
+	return app
 }
 
 func do(t *testing.T, app *fiber.App, req *http.Request) *http.Response {
@@ -153,6 +155,67 @@ func TestNewApp_XFFFromTrustedProxy(t *testing.T) {
 	app := newTestApp(t, cfg)
 
 	assert.Equal(t, []int{401, 401, 401, 401}, failedAttempts(t, app, 4))
+}
+
+// A valid token from a throttled client IP is still accepted; failures from
+// that IP stay throttled.
+func TestNewApp_ValidTokenNotBlockedWhileLimited(t *testing.T) {
+	app := newTestApp(t, testConfig())
+
+	assert.Equal(t, []int{401, 401, 429}, failedAttempts(t, app, 3))
+
+	resp := do(t, app, authRequest("good-token", ""))
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "tenant-a", resp.Header.Get("X-Scope-OrgID"))
+
+	assert.Equal(t, http.StatusTooManyRequests, do(t, app, authRequest("wrong", "")).StatusCode)
+}
+
+// A trusted proxy that appends to X-Forwarded-For cannot be used to pick a
+// fresh bucket per request: forged left-most entries are ignored and the
+// right-most untrusted entry (here 198.51.100.1) is the key.
+func TestNewApp_ForgedLeftmostXFFFromTrustedProxy(t *testing.T) {
+	cfg := testConfig()
+	cfg.TrustedProxies = []string{testPeerIP}
+	app := newTestApp(t, cfg)
+
+	codes := make([]int, 0, 4)
+	for i := 0; i < 4; i++ {
+		xff := "203.0.113." + strconv.Itoa(i) + ", 198.51.100.1"
+		codes = append(codes, do(t, app, authRequest("wrong", xff)).StatusCode)
+	}
+	assert.Equal(t, []int{401, 401, 429, 429}, codes)
+}
+
+func TestNewApp_InvalidConfig(t *testing.T) {
+	l := logger.Discard()
+	ts := auth.NewTokenStore(l)
+	require.NoError(t, ts.Add("good-token", "tenant-a"))
+
+	tests := []struct {
+		name string
+		mod  func(*config.Config)
+	}{
+		{"invalid trusted proxy", func(c *config.Config) { c.TrustedProxies = []string{"10.0.0.0/33"} }},
+		{"zero max", func(c *config.Config) { c.RateLimitMax = 0 }},
+		{"negative max", func(c *config.Config) { c.RateLimitMax = -1 }},
+		{"zero window", func(c *config.Config) { c.RateLimitWindow = 0 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := testConfig()
+			tt.mod(&cfg)
+			_, err := newApp(cfg, l, metrics.New("test"), ts)
+			assert.Error(t, err)
+		})
+	}
+
+	// Rate limit settings are not validated when the limiter is disabled.
+	cfg := testConfig()
+	cfg.RateLimitEnabled = false
+	cfg.RateLimitMax = 0
+	_, err := newApp(cfg, l, metrics.New("test"), ts)
+	assert.NoError(t, err)
 }
 
 func TestNewApp_RateLimitDisabled(t *testing.T) {

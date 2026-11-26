@@ -8,13 +8,16 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/lutfailham96/prom-tenant-gateway/internal/auth"
 	"github.com/lutfailham96/prom-tenant-gateway/internal/handler"
 	"github.com/lutfailham96/prom-tenant-gateway/internal/logger"
 	"github.com/lutfailham96/prom-tenant-gateway/internal/metrics"
+	"github.com/lutfailham96/prom-tenant-gateway/internal/ratelimit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -135,6 +138,92 @@ func TestValidateToken_SetsAuthResultLocal(t *testing.T) {
 	assert.Equal(t, []string{
 		metrics.ResultSuccess, metrics.ResultInvalidToken, metrics.ResultMissingHeader, metrics.ResultInvalidHeader,
 	}, got)
+}
+
+// limitedApp wires ValidateToken with a failure limiter keyed on a constant,
+// i.e. every request comes from the same client.
+func limitedApp(t *testing.T, max int) (*fiber.App, *metrics.Metrics) {
+	t.Helper()
+	ts := auth.NewTokenStore(logger.Discard())
+	require.NoError(t, ts.Add("good", "tenant-a"))
+	m := metrics.New("test")
+	m.SetTenants(ts.Tenants(), ts.Count())
+	l, err := ratelimit.New(max, time.Minute)
+	require.NoError(t, err)
+	h := handler.New(ts, m, "9.9.9-test",
+		handler.WithFailureLimiter(l, func(*fiber.Ctx) string { return "client" }))
+
+	app := fiber.New()
+	app.Get("/validate-token", h.ValidateToken)
+	return app, m
+}
+
+func TestValidateToken_FailureLimit(t *testing.T) {
+	app, _ := limitedApp(t, 3)
+
+	// Missing, malformed and invalid credentials all count as failures.
+	assert.Equal(t, http.StatusUnauthorized, validate(t, app, "").StatusCode)
+	assert.Equal(t, http.StatusUnauthorized, validate(t, app, "Basic x").StatusCode)
+	assert.Equal(t, http.StatusUnauthorized, validate(t, app, "Bearer bad").StatusCode)
+
+	resp := validate(t, app, "Bearer bad")
+	assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
+	assert.Equal(t, "application/json; charset=utf-8", resp.Header.Get("Content-Type"))
+	assert.Equal(t, "rate limit exceeded", errorBody(t, resp))
+	retry, err := strconv.Atoi(resp.Header.Get("Retry-After"))
+	require.NoError(t, err)
+	assert.True(t, retry >= 1 && retry <= 60, "Retry-After=%d", retry)
+
+	assert.Equal(t, http.StatusTooManyRequests, validate(t, app, "").StatusCode)
+}
+
+// A valid token is accepted while the client is throttled, and does not
+// lift the throttle for further failures.
+func TestValidateToken_ValidTokenNotLimited(t *testing.T) {
+	app, m := limitedApp(t, 1)
+
+	assert.Equal(t, http.StatusUnauthorized, validate(t, app, "Bearer bad").StatusCode)
+	assert.Equal(t, http.StatusTooManyRequests, validate(t, app, "Bearer bad").StatusCode)
+
+	for i := 0; i < 3; i++ {
+		resp := validate(t, app, "Bearer good")
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "tenant-a", resp.Header.Get(handler.HeaderScopeOrgID))
+		assert.Empty(t, resp.Header.Get("Retry-After"))
+	}
+
+	assert.Equal(t, http.StatusTooManyRequests, validate(t, app, "Bearer bad").StatusCode)
+
+	// Each request is counted under exactly one result.
+	rec := httptest.NewRecorder()
+	m.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	out := rec.Body.String()
+	assert.Contains(t, out, `prom_tenant_gateway_auth_requests_total{result="invalid_token",tenant=""} 1`)
+	assert.Contains(t, out, `prom_tenant_gateway_auth_requests_total{result="rate_limited",tenant=""} 2`)
+	assert.Contains(t, out, `prom_tenant_gateway_auth_requests_total{result="success",tenant="tenant-a"} 3`)
+}
+
+// The rate-limited result is visible to the request log.
+func TestValidateToken_RateLimitedAuthResultLocal(t *testing.T) {
+	ts := auth.NewTokenStore(logger.Discard())
+	l, err := ratelimit.New(1, time.Minute)
+	require.NoError(t, err)
+	h := handler.New(ts, metrics.New("test"), "9.9.9-test",
+		handler.WithFailureLimiter(l, func(*fiber.Ctx) string { return "client" }))
+
+	var got []string
+	app := fiber.New()
+	app.Use(func(c *fiber.Ctx) error {
+		err := c.Next()
+		result, _ := c.Locals(metrics.LocalsAuthResult).(string)
+		got = append(got, result)
+		return err
+	})
+	app.Get("/validate-token", h.ValidateToken)
+
+	validate(t, app, "Bearer bad")
+	validate(t, app, "Bearer bad")
+	assert.Equal(t, []string{metrics.ResultInvalidToken, metrics.ResultRateLimited}, got)
 }
 
 func TestHealth(t *testing.T) {

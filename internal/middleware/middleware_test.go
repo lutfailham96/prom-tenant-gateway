@@ -3,13 +3,11 @@ package middleware_test
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/recover"
@@ -60,50 +58,9 @@ func observedApp(level slog.Level) (*fiber.App, *metrics.Metrics, *bytes.Buffer)
 	l := logger.New(&buf, "test", "1.0.0", level)
 	m := metrics.New("test")
 	app := fiber.New(fiber.Config{ErrorHandler: handler.CustomErrorHandler(l)})
-	app.Use(middleware.RequestObserver(l, m))
+	app.Use(middleware.RequestObserver(l, m, nil))
 	app.Use(recover.New())
 	return app, m, &buf
-}
-
-// Only failed attempts count towards the limit.
-func TestRateLimiter_CountsOnlyFailedRequests(t *testing.T) {
-	m := metrics.New("test")
-	app := fiber.New()
-	app.Get("/auth", middleware.RateLimiter(m, 3, 10*time.Second), func(c *fiber.Ctx) error {
-		if c.Get("Authorization") == "Bearer good" {
-			return c.SendStatus(fiber.StatusOK)
-		}
-		return c.SendStatus(fiber.StatusUnauthorized)
-	})
-
-	for i := 0; i < 5; i++ {
-		assert.Equal(t, http.StatusOK, get(t, app, "/auth", "Bearer good"), "valid request %d", i+1)
-	}
-	for i := 0; i < 3; i++ {
-		assert.Equal(t, http.StatusUnauthorized, get(t, app, "/auth", "Bearer wrong"), "failed attempt %d", i+1)
-	}
-
-	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/auth", nil), -1)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
-	assert.Equal(t, "application/json; charset=utf-8", resp.Header.Get("Content-Type"))
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	assert.JSONEq(t, `{"error":"rate limit exceeded"}`, string(body))
-
-	assert.Contains(t, scrape(t, m), `prom_tenant_gateway_auth_requests_total{result="rate_limited",tenant=""} 1`)
-}
-
-func TestRateLimiter_Defaults(t *testing.T) {
-	app := fiber.New()
-	app.Get("/auth", middleware.RateLimiter(metrics.New("test"), 0, 0), func(c *fiber.Ctx) error {
-		return c.SendStatus(fiber.StatusUnauthorized)
-	})
-
-	for i := 0; i < 100; i++ {
-		require.Equal(t, http.StatusUnauthorized, get(t, app, "/auth", ""), "attempt %d", i+1)
-	}
-	assert.Equal(t, http.StatusTooManyRequests, get(t, app, "/auth", ""), "default max is 100")
 }
 
 // Successful requests are logged at debug, so they vanish at info level, but
@@ -212,4 +169,31 @@ func TestRequestObserver_SkipsProbesInLog(t *testing.T) {
 	get(t, app, "/api/data", "")
 	assert.Contains(t, buf.String(), "/api/data")
 	assert.Contains(t, scrape(t, m), `route="/healthz"`)
+}
+
+// The logged ip comes from the client IP resolver; without one it is the TCP
+// peer.
+func TestRequestObserver_LogsResolvedClientIP(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		clientIP func(*fiber.Ctx) string
+		want     string
+	}{
+		{"resolver", func(*fiber.Ctx) string { return "203.0.113.7" }, "203.0.113.7"},
+		{"peer fallback", nil, "0.0.0.0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			l := logger.New(&buf, "test", "1.0.0", slog.LevelInfo)
+			app := fiber.New(fiber.Config{ErrorHandler: handler.CustomErrorHandler(l)})
+			app.Use(middleware.RequestObserver(l, metrics.New("test"), tc.clientIP))
+			app.Get("/validate-token", func(c *fiber.Ctx) error { return c.SendStatus(fiber.StatusUnauthorized) })
+
+			get(t, app, "/validate-token", "")
+
+			lines := logLines(t, &buf)
+			require.Len(t, lines, 1)
+			assert.Equal(t, tc.want, lines[0]["ip"])
+		})
+	}
 }

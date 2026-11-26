@@ -48,6 +48,7 @@ the pods: `kubectl -n mimir rollout restart deployment/prom-tenant-gateway`.
 | `05-hpa.yaml` | HPA: CPU 70%, 3-10 replicas |
 | `06-poddisruptionbudget.yaml` | Min 2 available during disruptions |
 | `07-rbac.yaml` | ServiceAccount only — no Role, no API token mounted |
+| `08-networkpolicy.yaml` | Ingress only from the ingress-nginx/Traefik and monitoring namespaces (adjust names per cluster) |
 | `kustomization.yaml` | Kustomize config (images, labels, generators) |
 
 ## Security Features
@@ -58,6 +59,11 @@ the pods: `kubectl -n mimir rollout restart deployment/prom-tenant-gateway`.
 - No privilege escalation
 - Pod anti-affinity (spread across nodes)
 - No Kubernetes API access (no RBAC, `automountServiceAccountToken: false`)
+- NetworkPolicy: only the ingress controller and the monitoring stack can
+  reach the gateway (`08-networkpolicy.yaml`)
+- `TRUSTED_PROXIES` defaults to loopback only. Set it to the ingress pod IPs/CIDR
+  of the target cluster for per-client rate limiting — never to whole RFC1918
+  ranges (see the comment in `01-configmap.yaml`)
 
 ## Image Updates
 
@@ -99,11 +105,13 @@ spec:
 
 ## Gateway API Integration
 
-For Mimir multi-tenant, use the Gateway API manifests in `deploy/gateway-api/`:
-- `01-gateway.yaml` - GatewayClass + Gateway
-- `02-middleware-auth.yaml` - Traefik Middleware (auth)
-- `03-httproute-internal.yaml` - Internal HTTPRoute
-- `04-httproute-https.yaml` - HTTPS HTTPRoute (TLS)
+For Mimir multi-tenant, use the Gateway API manifests in `deploy/gateway-api/`
+(routes on the shared Gateway `traefik/traefik-internal-gateway`):
+- `02-middleware-auth.yaml` - Traefik ForwardAuth Middleware
+- `04-httproute-https.yaml` - HTTPS HTTPRoute (push + query, with auth)
+- `05-httproute-http-redirect.yaml` - HTTP → HTTPS redirect, no backends
+
+`08-networkpolicy.yaml` must allow the `traefik` namespace for ForwardAuth.
 
 ## Verification
 

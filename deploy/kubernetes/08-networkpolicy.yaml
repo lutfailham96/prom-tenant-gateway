@@ -1,0 +1,55 @@
+# Only the ingress controller (auth subrequests / ForwardAuth) and the
+# monitoring stack (/metrics scrapes) may reach the gateway. Everything else,
+# including other pods in the mimir namespace, is denied, so in-cluster pods
+# can neither brute-force /validate-token nor forge X-Forwarded-For.
+#
+# Adjust the namespace names to the target cluster (they match the
+# automatic kubernetes.io/metadata.name label, Kubernetes >= 1.22):
+#   - ingress: namespaces of ingress-nginx and/or Traefik
+#   - monitoring: namespaces of Prometheus / Alloy / Grafana Agent scrapers
+#
+# Notes:
+#   - kubelet liveness/readiness probes come from the node and are allowed
+#     by Calico/Cilium for the local node regardless of this policy.
+#   - hostNetwork ingress controllers do not match a namespaceSelector; add
+#     an ipBlock with the ingress node IPs in that case.
+#   - Requires a CNI that enforces NetworkPolicy (Calico, Cilium, ...).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: prom-tenant-gateway
+  namespace: mimir
+  labels:
+    app: prom-tenant-gateway
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app: prom-tenant-gateway
+  policyTypes:
+  - Ingress
+  ingress:
+  # Auth subrequests (ingress-nginx auth-url) and Traefik ForwardAuth.
+  - from:
+    - namespaceSelector:
+        matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values:
+          - ingress-nginx
+          - traefik
+    ports:
+    - protocol: TCP
+      port: http
+  # Prometheus-compatible scrapers.
+  - from:
+    - namespaceSelector:
+        matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values:
+          - monitoring
+          - prometheus
+    ports:
+    - protocol: TCP
+      port: http

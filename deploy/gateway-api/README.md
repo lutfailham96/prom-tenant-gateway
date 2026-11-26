@@ -1,88 +1,81 @@
 # Gateway API Manifests for prom-tenant-gateway
 
-Native Kubernetes Gateway API manifests using Traefik as the Gateway controller.
+Routes that expose Mimir through the shared Traefik Gateway, authenticated by
+prom-tenant-gateway via a Traefik ForwardAuth middleware.
 
 ## Structure
 
 ```
 deploy/gateway-api/
-├── 00-gatewayclass.yaml          # Cluster-scoped (apply once per cluster)
-├── 01-gateway.yaml               # Gateway with HTTP + HTTPS listeners
-├── 02-middleware-auth.yaml       # ForwardAuth middleware (auth validation)
-├── 03-middleware-redirect.yaml   # HTTP -> HTTPS redirect middleware
-├── 04-httproute-https.yaml       # HTTPS route with auth
-├── 05-httproute-http-redirect.yaml # HTTP route (redirect only)
-├── 06-referencegrant.yaml        # Allows HTTPRoute to reference Middleware
-└── kustomization.yaml            # Kustomize deployment
+├── 02-middleware-auth.yaml          # ForwardAuth middleware -> /validate-token
+├── 04-httproute-https.yaml          # HTTPS route with auth (push + query)
+├── 05-httproute-http-redirect.yaml  # HTTP -> HTTPS redirect (RequestRedirect, no backends)
+└── kustomization.yaml
 ```
+
+The `GatewayClass` and the Gateway itself are **not** part of this
+directory: the routes attach to the shared Gateway
+`traefik/traefik-internal-gateway`, owned by the Traefik/platform installation.
+
+| Route | Gateway listener (`sectionName`) | Host | Behaviour |
+|-------|----------------------------------|------|-----------|
+| `prom-tenant-gateway-internal` | `https-metrics-v2-internal-obv` (443) | `metrics-v2.internal.obv.cloudstream.tech` | `/api/v1/push` → distributor, `/prometheus` → query-frontend, both behind ForwardAuth |
+| `mimir-httproute-http-redirect` | `http` (80) | `metrics-v2.internal.obv.cloudstream.tech` | `301` to `https://…:443`, no backends |
 
 ## Prerequisites
 
-1. **Traefik v3.0+** installed as Gateway controller
-2. **Gateway API CRDs** installed (`gateway.networking.k8s.io/*`)
-3. **cert-manager** with `letsencrypt-dns-prod` ClusterIssuer
-4. **prom-tenant-gateway** deployed in `mimir` namespace
-5. **mimir-distributed-distributor-headless** service in `mimir` namespace
+1. **Traefik v3.0+** as Gateway controller with the Traefik CRDs (`traefik.io/v1alpha1` Middleware)
+2. **Gateway API CRDs** (`gateway.networking.k8s.io/v1`)
+3. Shared Gateway `traefik/traefik-internal-gateway` with listeners `http` and
+   `https-metrics-v2-internal-obv`, whose `allowedRoutes` admit routes from the
+   `mimir` namespace, and a TLS certificate for the host
+4. **prom-tenant-gateway** deployed in `mimir` (`deploy/kubernetes/`); its
+   NetworkPolicy must allow the `traefik` namespace
+5. Mimir services `mimir-distributed-distributor-headless` and
+   `mimir-distributed-query-frontend` in `mimir`
 
 ## Deploy
 
-### Option 1: Kustomize (recommended)
 ```bash
-# 1. Apply GatewayClass (cluster-scoped, needs admin)
-kubectl apply -f 00-gatewayclass.yaml
-
-# 2. Apply namespace-scoped resources
-kubectl apply -k deploy/gateway-api/
-```
-
-### Option 2: Individual files (for specific ordering)
-```bash
-# 1. GatewayClass (cluster-scoped)
-kubectl apply -f 00-gatewayclass.yaml
-
-# 2. Gateway + Middleware + HTTPRoute + ReferenceGrant
-kubectl apply -f 01-gateway.yaml
-kubectl apply -f 02-middleware-auth.yaml
-kubectl apply -f 03-middleware-redirect.yaml
-kubectl apply -f 04-httproute-https.yaml
-kubectl apply -f 05-httproute-http-redirect.yaml
-kubectl apply -f 06-referencegrant.yaml
+kubectl kustomize deploy/gateway-api          # preview
+kubectl apply -k deploy/gateway-api
 ```
 
 ## Verify
 
 ```bash
-# Check GatewayClass
-kubectl get gatewayclass traefik -o yaml
+# Routes accepted by the shared Gateway (Accepted / ResolvedRefs: True)
+kubectl -n mimir get httproute prom-tenant-gateway-internal mimir-httproute-http-redirect -o yaml
 
-# Check Gateway status (should show Ready: True)
-kubectl get gateway -n mimir traefik-gateway -o yaml
-
-# Check HTTPRoute status (should show Accepted: True)
-kubectl get httproute -n mimir -o yaml
-
-# Check Middleware
-kubectl get middleware -n mimir
-
-# Check ReferenceGrant
-kubectl get referencegrant -n mimir
+# Middleware
+kubectl -n mimir get middleware prom-tenant-gateway-middleware
 ```
 
 ## Test
 
 ```bash
-# Test HTTPS endpoint with valid token
-curl -H "Authorization: Bearer <valid-token>" https://metrics.obv.cloudstream.tech/api/v1/push
+H=metrics-v2.internal.obv.cloudstream.tech
 
-# Test HTTP redirect
-curl -v http://metrics.obv.cloudstream.tech/api/v1/push  # Should 301 to HTTPS
+# Valid token
+curl -H "Authorization: Bearer <valid-token>" https://$H/prometheus/api/v1/labels
 
-# Test invalid token
-curl -H "Authorization: Bearer invalid" https://metrics.obv.cloudstream.tech/api/v1/push  # Should 401
+# HTTP redirect (301 to https, never proxied to Mimir)
+curl -v http://$H/api/v1/push
 
-# Test missing auth
-curl https://metrics.obv.cloudstream.tech/api/v1/push  # Should 401
+# Invalid / missing token -> 401 (429 after too many failures from one client)
+curl -H "Authorization: Bearer invalid" https://$H/api/v1/push
+curl https://$H/api/v1/push
 ```
+
+## Notes
+
+- `ExtensionRef` is a `LocalObjectReference` (group, kind, name): the
+  Middleware must be in the route's namespace and the reference has no
+  `namespace` field. Because the filter and all `backendRefs` are in `mimir`,
+  no `ReferenceGrant` is needed.
+- The HTTP → HTTPS redirect uses the native `RequestRedirect` filter. The
+  redirect route has no `backendRefs`, so plain HTTP can never reach Mimir
+  unauthenticated, even if a filter were misconfigured.
 
 ## Mapping from Old Ingress
 
@@ -91,14 +84,6 @@ curl https://metrics.obv.cloudstream.tech/api/v1/push  # Should 401
 | `nginx.ingress.kubernetes.io/auth-url` | `Middleware` (ForwardAuth) + `ExtensionRef` filter |
 | `auth-response-headers: X-Scope-OrgID` | `Middleware.forwardAuth.authResponseHeaders` |
 | `auth-snippet` (proxy_set_header) | `Middleware.forwardAuth.authRequestHeaders` |
-| `force-ssl-redirect` + `ssl-redirect` | HTTP listener + `RedirectScheme` Middleware + separate HTTPRoute |
-| `cert-manager.io/cluster-issuer` | Annotation on `Gateway` |
-| `ingressClassName: nginx` | `GatewayClass.controllerName: traefik.io/gateway-controller` |
-
-## Notes
-
-- **GatewayClass** is cluster-scoped — apply once per cluster (requires admin)
-- **ReferenceGrant** allows HTTPRoute to reference Middleware in same namespace
-- **ExtensionRef** filter requires Traefik Middleware CRD (`traefik.io/v1alpha1`)
-- TLS certificate managed by cert-manager via Gateway annotation
-- HTTP listener redirects to HTTPS via Middleware (not built-in Gateway API feature yet)
+| `force-ssl-redirect` + `ssl-redirect` | HTTP route with `RequestRedirect` filter |
+| `cert-manager.io/cluster-issuer` | Certificate on the shared Gateway listener (platform-owned) |
+| `ingressClassName: nginx` | `parentRefs` to `traefik/traefik-internal-gateway` |

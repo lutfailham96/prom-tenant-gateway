@@ -1,27 +1,25 @@
-# HTTPRoute for HTTP traffic - Redirects all HTTP to HTTPS
-# Uses redirect-https middleware to enforce HTTPS
+# HTTPRoute for plain HTTP on the shared Gateway: redirects everything to
+# HTTPS with the native RequestRedirect filter. There are deliberately no
+# backendRefs, so plain-HTTP requests can never reach Mimir (in particular
+# not the distributor without the ForwardAuth middleware).
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: mimir-httproute-http-redirect
   namespace: mimir
 spec:
-  hostnames:
-  - "metrics.obv.cloudstream.tech"
   parentRefs:
-  - name: traefik-gateway
-    namespace: mimir
-    sectionName: http
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: traefik-internal-gateway
+      namespace: traefik
+      sectionName: http
+  hostnames:
+    - metrics-v2.internal.obv.cloudstream.tech
   rules:
-  - filters:
-    - type: ExtensionRef
-      extensionRef:
-        group: traefik.io
-        kind: Middleware
-        name: redirect-https
-        namespace: mimir
-    backendRefs:
-    - name: mimir-distributed-distributor-headless
-      port: 8080
-      namespace: mimir
-      weight: 1
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            port: 443
+            statusCode: 301

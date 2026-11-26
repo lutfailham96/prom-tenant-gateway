@@ -15,6 +15,7 @@ resources:
 - 05-hpa.yaml
 - 06-poddisruptionbudget.yaml
 - 07-rbac.yaml
+- 08-networkpolicy.yaml
 
 labels:
 - pairs:
