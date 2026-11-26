@@ -9,7 +9,7 @@ Lightweight authentication service for Grafana/Mimir multi-tenant environments. 
 - **Two configuration patterns**:
   - `TENANT_<ID>_TOKEN=<token>` (new, recommended)
   - `VALID_TOKENS_JSON={"tenant": "token"}` (legacy)
-- **Rate limiting** (configurable requests/window)
+- **Failed-auth rate limiting** per client IP (valid tokens are never limited)
 - **Prometheus metrics** (`/metrics`)
 - **Health check** (`/healthz`)
 - **Structured JSON logging**
@@ -63,14 +63,30 @@ end-to-end suite in Docker.
 | `/healthz` | GET | None | Health check |
 | `/metrics` | GET | None | Prometheus metrics |
 
-### Response Headers (on `/validate-token` success)
+### Responses of `/validate-token`
 
-```
-X-Scope-OrgID: <tenant-id>
-X-RateLimit-Limit: <max-requests>
-X-RateLimit-Remaining: <remaining>
-X-RateLimit-Reset: <seconds>
-```
+| Status | When | Headers / body |
+|--------|------|----------------|
+| `200` | Valid `Authorization: Bearer <token>` | `X-Scope-OrgID: <tenant-id>` |
+| `401` | Missing/malformed header or unknown token | `{"error": "..."}` |
+| `429` | Failed attempt from a client IP over the failure limit | `Retry-After: <seconds>`, `{"error":"rate limit exceeded"}` |
+
+### Rate limiting
+
+Only **failed** attempts (missing header, malformed header, invalid token) are
+counted, per client IP, in a fixed window of `RATE_LIMIT_WINDOW` that starts at
+the client's first failure. The first `RATE_LIMIT_MAX` failures get `401`; further
+failures get `429` until the window ends.
+
+The token is always validated first: a request with a **valid token is
+accepted (200) even while its client IP is limited**, and it does not reset the
+limit for that IP. A misbehaving client behind a shared NAT or proxy therefore
+cannot lock out legitimate tenants. Successful requests never touch the limiter.
+
+Trade-off: a limited client still learns when a guess is valid, so resistance
+to token guessing comes from token entropy. Use long random tokens
+(`openssl rand -hex 32`); tokens shorter than 32 characters are logged as weak
+at startup.
 
 ## Configuration
 
@@ -81,9 +97,10 @@ X-RateLimit-Reset: <seconds>
 | `PORT` | No | `8080` | HTTP server port |
 | `TENANT_<ID>_TOKEN` | Yes* | — | Token for tenant `<ID>` (e.g., `TENANT_PROD_TOKEN=abc`) |
 | `VALID_TOKENS_JSON` | Yes* | — | Legacy JSON map: `{"tenant": "token"}` |
-| `RATE_LIMIT_MAX` | No | `100` | Max **failed** auth attempts per client IP per window (successful requests are not counted) |
-| `RATE_LIMIT_WINDOW` | No | `10s` | Rate limit window (Go duration) |
-| `TRUSTED_PROXIES` | No | — | Comma-separated proxy IPs/CIDRs whose `X-Forwarded-For` is trusted (e.g. the ingress pod CIDR). When empty, `X-Forwarded-For` is ignored and all clients behind a proxy share one rate-limit bucket |
+| `RATE_LIMIT_ENABLED` | No | `true` | Enable the failed-auth rate limiter |
+| `RATE_LIMIT_MAX` | No | `100` | Failed auth attempts allowed per client IP per window (must be > 0; valid tokens are never counted or limited) |
+| `RATE_LIMIT_WINDOW` | No | `1m` | Rate limit window (Go duration, must be > 0) |
+| `TRUSTED_PROXIES` | No | — | Comma-separated proxy IPs/CIDRs whose `X-Forwarded-For` is trusted (e.g. the ingress pod IPs). Invalid entries fail startup. When empty, `X-Forwarded-For` is ignored and clients behind a proxy share one failure bucket |
 
 *At least one token configuration method required.
 
@@ -92,10 +109,13 @@ of `[a-zA-Z0-9!-_.*'()]`, must not be `.`/`..` (Mimir rules; `|` is rejected
 because it is Mimir's tenant-federation separator), and one token cannot map to
 two tenants. Surrounding whitespace in tokens is trimmed.
 
-The proxies listed in `TRUSTED_PROXIES` must overwrite (not append to) a
-client-supplied `X-Forwarded-For`; the left-most valid IP is used as the client
-IP. ingress-nginx does this by default (`use-forwarded-headers: false`), as does
-Traefik for untrusted entrypoints.
+Client IP resolution: `X-Forwarded-For` is only read when the TCP peer is in
+`TRUSTED_PROXIES`. It is then walked from right to left, skipping trusted
+proxies, and the first untrusted address is the client IP (an unparsable entry
+stops the walk at the last trusted hop). Forged entries a client prepends are
+therefore ignored, whether the proxy overwrites or appends to the header. Keep
+`TRUSTED_PROXIES` as narrow as possible — never whole RFC1918 ranges, which
+would let any pod forge its client IP.
 
 ### Token Patterns
 
@@ -116,29 +136,28 @@ VALID_TOKENS_JSON='{"tenant-legacy": "legacy-token-1", "another-tenant": "legacy
 
 ## Kubernetes Deployment
 
+The gateway itself (Deployment, Service, HPA, PDB, NetworkPolicy, ...) is in
+`deploy/kubernetes/` (`kubectl apply -k deploy/kubernetes`).
+
 ### Gateway API (Traefik) — Recommended
 
-Native Kubernetes Gateway API manifests in `deploy/gateway-api/`:
+Routes in `deploy/gateway-api/` attach to the shared Gateway
+`traefik/traefik-internal-gateway` (not managed here):
 
 ```bash
-# 1. GatewayClass (cluster-scoped, once per cluster)
-kubectl apply -f deploy/gateway-api/00-gatewayclass.yaml
-
-# 2. Namespace resources
 kubectl apply -k deploy/gateway-api/
 ```
 
 Components:
-- `Gateway` — HTTP + HTTPS listeners with TLS termination (cert-manager)
 - `Middleware` (ForwardAuth) — Calls `/validate-token` on prom-tenant-gateway
-- `Middleware` (RedirectScheme) — HTTP → HTTPS redirect
-- `HTTPRoute` (HTTPS) — Routes `/api/v1/push` with auth
-- `HTTPRoute` (HTTP) — Redirects to HTTPS
-- `ReferenceGrant` — Allows HTTPRoute to reference Middleware
+- `HTTPRoute` (HTTPS) — `/api/v1/push` and `/prometheus` with auth
+- `HTTPRoute` (HTTP) — Native `RequestRedirect` to HTTPS, no backends
+
+See `deploy/gateway-api/README.md`.
 
 ### Legacy Ingress (nginx)
 
-See `deploy/ingress/` for old nginx Ingress manifests.
+See `deploy/kubernetes/ingress-mimir-internal.yaml` (not in the kustomization).
 
 ## Project Structure
 
@@ -149,11 +168,13 @@ See `deploy/ingress/` for old nginx Ingress manifests.
 │   └── app.go                  # newApp(): Fiber config + routes (tested in app_test.go)
 ├── internal/
 │   ├── auth/token_store.go     # Token storage & validation
+│   ├── clientip/clientip.go    # Client IP behind trusted proxies (X-Forwarded-For)
 │   ├── config/config.go        # Configuration
 │   ├── handler/handler.go      # HTTP handlers
 │   ├── logger/logger.go        # slog JSON logger
 │   ├── metrics/metrics.go      # Prometheus metrics (client_golang, own registry)
-│   └── middleware/middleware.go # Rate limiting, request log + latency metrics
+│   ├── middleware/middleware.go # Request log + latency metrics
+│   └── ratelimit/ratelimit.go  # Failed-auth limiter per client IP
 ├── deploy/
 │   ├── kubernetes/             # Deployment, Service, HPA, PDB, ...
 │   └── gateway-api/            # Kubernetes Gateway API manifests

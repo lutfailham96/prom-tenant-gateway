@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"log/slog"
+	"math"
 	"strconv"
 	"strings"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/adaptor"
 	"github.com/lutfailham96/prom-tenant-gateway/internal/auth"
 	"github.com/lutfailham96/prom-tenant-gateway/internal/metrics"
+	"github.com/lutfailham96/prom-tenant-gateway/internal/ratelimit"
 )
 
 // HeaderScopeOrgID carries the authenticated tenant to Mimir.
@@ -21,6 +23,7 @@ var (
 	bodyMissingHeader = []byte(`{"error":"missing Authorization header"}`)
 	bodyInvalidHeader = []byte(`{"error":"invalid Authorization header"}`)
 	bodyInvalidToken  = []byte(`{"error":"invalid token"}`)
+	bodyRateLimited   = []byte(`{"error":"rate limit exceeded"}`)
 )
 
 type Handler struct {
@@ -28,42 +31,59 @@ type Handler struct {
 	metrics        *metrics.Metrics
 	metricsHandler fiber.Handler
 	version        string
+
+	limiter  *ratelimit.Limiter
+	limitKey func(*fiber.Ctx) string
+}
+
+// Option configures a Handler.
+type Option func(*Handler)
+
+// WithFailureLimiter throttles failed authentication attempts per key (the
+// client IP). Requests with a valid token are never counted or limited.
+func WithFailureLimiter(l *ratelimit.Limiter, key func(*fiber.Ctx) string) Option {
+	return func(h *Handler) {
+		h.limiter = l
+		h.limitKey = key
+	}
 }
 
 // New returns the HTTP handlers; version is reported by /healthz.
-func New(tokenStore *auth.TokenStore, m *metrics.Metrics, version string) *Handler {
-	return &Handler{
+func New(tokenStore *auth.TokenStore, m *metrics.Metrics, version string, opts ...Option) *Handler {
+	h := &Handler{
 		tokenStore:     tokenStore,
 		metrics:        m,
 		metricsHandler: adaptor.HTTPHandler(m.Handler()),
 		version:        version,
 	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 // ValidateToken authenticates "Authorization: Bearer <token>" and, on
 // success, returns the tenant in X-Scope-OrgID. It does not log: the request
 // observer middleware writes one log line per request and reads the result
 // from c.Locals(metrics.LocalsAuthResult).
+//
+// The token is always validated first. A valid token is accepted even while
+// the client IP is throttled; only failures are counted by the limiter and,
+// once over the limit, answered with 429 instead of 401.
 func (h *Handler) ValidateToken(c *fiber.Ctx) error {
 	authHeader := c.Get(fiber.HeaderAuthorization)
 	if authHeader == "" {
-		h.metrics.AuthFailure(metrics.ResultMissingHeader)
-		c.Locals(metrics.LocalsAuthResult, metrics.ResultMissingHeader)
-		return unauthorized(c, bodyMissingHeader)
+		return h.reject(c, metrics.ResultMissingHeader, bodyMissingHeader)
 	}
 
 	token, ok := bearerToken(authHeader)
 	if !ok {
-		h.metrics.AuthFailure(metrics.ResultInvalidHeader)
-		c.Locals(metrics.LocalsAuthResult, metrics.ResultInvalidHeader)
-		return unauthorized(c, bodyInvalidHeader)
+		return h.reject(c, metrics.ResultInvalidHeader, bodyInvalidHeader)
 	}
 
 	tenantID, found := h.tokenStore.Validate(token)
 	if !found {
-		h.metrics.AuthFailure(metrics.ResultInvalidToken)
-		c.Locals(metrics.LocalsAuthResult, metrics.ResultInvalidToken)
-		return unauthorized(c, bodyInvalidToken)
+		return h.reject(c, metrics.ResultInvalidToken, bodyInvalidToken)
 	}
 
 	h.metrics.AuthSuccess(tenantID)
@@ -72,8 +92,20 @@ func (h *Handler) ValidateToken(c *fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusOK)
 }
 
-func unauthorized(c *fiber.Ctx, body []byte) error {
-	c.Status(fiber.StatusUnauthorized)
+// reject answers a failed authentication with 401, or with 429 (result
+// rate_limited, Retry-After set) when the client is over the failure limit.
+// Each request is counted under exactly one result.
+func (h *Handler) reject(c *fiber.Ctx, result string, body []byte) error {
+	status := fiber.StatusUnauthorized
+	if h.limiter != nil {
+		if limited, retryAfter := h.limiter.Fail(h.limitKey(c)); limited {
+			status, result, body = fiber.StatusTooManyRequests, metrics.ResultRateLimited, bodyRateLimited
+			c.Set(fiber.HeaderRetryAfter, strconv.Itoa(int(math.Ceil(retryAfter.Seconds()))))
+		}
+	}
+	h.metrics.AuthFailure(result)
+	c.Locals(metrics.LocalsAuthResult, result)
+	c.Status(status)
 	c.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSONCharsetUTF8)
 	return c.Send(body)
 }

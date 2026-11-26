@@ -22,8 +22,12 @@ func benchmarkValidate(b *testing.B, authorization string) {
 	m := metrics.New(version)
 	m.SetTenants(ts.Tenants(), ts.Count())
 	cfg := testConfig()
-	cfg.RateLimitEnabled = false // measure the handler path, not the limiter's storage
-	hnd := newApp(cfg, l, m, ts).Handler()
+	cfg.RateLimitEnabled = false // the invalid-token benchmark would otherwise measure 429s
+	app, err := newApp(cfg, l, m, ts)
+	if err != nil {
+		b.Fatal(err)
+	}
+	hnd := app.Handler()
 
 	b.ReportAllocs()
 	for b.Loop() {

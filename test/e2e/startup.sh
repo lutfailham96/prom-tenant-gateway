@@ -16,4 +16,6 @@ run "no tokens" "No valid tokens configured"
 run "only TENANT_TOKEN (no tenant part)" "No valid tokens configured" -e TENANT_TOKEN=x0123456789abcdef0123456789abcdef
 run "CHANGE_ME placeholder (env)" "placeholder" -e TENANT_PROD_TOKEN=CHANGE_ME_PROD_TOKEN
 run "change_me placeholder (JSON, lowercase)" "placeholder" -e 'VALID_TOKENS_JSON={"x":"change_me"}'
+run "invalid TRUSTED_PROXIES CIDR" "TRUSTED_PROXIES: invalid trusted proxy CIDR" -e TENANT_A_TOKEN=x0123456789abcdef0123456789abcdef -e TRUSTED_PROXIES=10.0.0.0/33
+run "negative RATE_LIMIT_MAX" "must be positive" -e TENANT_A_TOKEN=x0123456789abcdef0123456789abcdef -e RATE_LIMIT_MAX=-1
 summary startup

@@ -6,12 +6,9 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/lutfailham96/prom-tenant-gateway/internal/handler"
 	"github.com/lutfailham96/prom-tenant-gateway/internal/metrics"
 )
-
-var bodyRateLimited = []byte(`{"error":"rate limit exceeded"}`)
 
 // RequestObserver records latency metrics for every request and writes one
 // log line per request (except health/metrics probes).
@@ -25,7 +22,13 @@ var bodyRateLimited = []byte(`{"error":"rate limit exceeded"}`)
 // high-volume), 401/403/429 warn (security-relevant), other 4xx info,
 // 5xx error. Register it before the recover middleware so panics are
 // observed as 500s.
-func RequestObserver(log *slog.Logger, m *metrics.Metrics) fiber.Handler {
+//
+// clientIP resolves the logged client IP (see clientip.Resolver.IP); nil
+// uses the TCP peer address.
+func RequestObserver(log *slog.Logger, m *metrics.Metrics, clientIP func(*fiber.Ctx) string) fiber.Handler {
+	if clientIP == nil {
+		clientIP = func(c *fiber.Ctx) string { return c.Context().RemoteIP().String() }
+	}
 	var routes routeSet
 	return func(c *fiber.Ctx) error {
 		start := time.Now()
@@ -57,7 +60,7 @@ func RequestObserver(log *slog.Logger, m *metrics.Metrics) fiber.Handler {
 			slog.String("path", path),
 			slog.Int("status", status),
 			slog.Float64("latency_ms", float64(latency.Microseconds())/1000),
-			slog.String("ip", c.IP()),
+			slog.String("ip", clientIP(c)),
 			slog.String("user_agent", c.Get(fiber.HeaderUserAgent)),
 		)
 		if result, ok := c.Locals(metrics.LocalsAuthResult).(string); ok {
@@ -134,33 +137,4 @@ func normalizeMethod(method string) string {
 	default:
 		return "other"
 	}
-}
-
-// RateLimiter limits failed auth attempts per client IP.
-func RateLimiter(m *metrics.Metrics, max int, window time.Duration) fiber.Handler {
-	if max == 0 {
-		max = 100
-	}
-	if window == 0 {
-		window = 1 * time.Minute
-	}
-
-	return limiter.New(limiter.Config{
-		Max:        max,
-		Expiration: window,
-		// Only failed attempts count towards the limit: this throttles token
-		// brute-forcing without rate limiting legitimate remote_write/query
-		// traffic, where every request triggers a /validate-token call.
-		// The key is c.IP() (Fiber default), which honours X-Forwarded-For
-		// only from TRUSTED_PROXIES.
-		SkipSuccessfulRequests: true,
-		// Logged once by RequestObserver (status 429, auth_result rate_limited).
-		LimitReached: func(c *fiber.Ctx) error {
-			m.AuthFailure(metrics.ResultRateLimited)
-			c.Locals(metrics.LocalsAuthResult, metrics.ResultRateLimited)
-			c.Status(fiber.StatusTooManyRequests)
-			c.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSONCharsetUTF8)
-			return c.Send(bodyRateLimited)
-		},
-	})
 }

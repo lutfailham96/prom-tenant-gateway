@@ -3,14 +3,12 @@ kind: Kustomization
 
 namespace: mimir
 
+# The GatewayClass and the shared Gateway (traefik/traefik-internal-gateway)
+# are owned by the Traefik/platform installation and are not managed here.
+# The routes attach to it cross-namespace via parentRefs. No ReferenceGrant
+# is needed: ExtensionRef filters and backendRefs only reference objects in
+# the route's own namespace.
 resources:
-  - 00-gatewayclass.yaml
-  - 01-gateway.yaml
   - 02-middleware-auth.yaml
-  - 03-middleware-redirect.yaml
   - 04-httproute-https.yaml
   - 05-httproute-http-redirect.yaml
-  - 06-referencegrant.yaml
-
-# Apply order: GatewayClass -> Gateway -> Middleware -> HTTPRoute -> ReferenceGrant
-# GatewayClass is cluster-scoped, others are namespace-scoped

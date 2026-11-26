@@ -60,7 +60,11 @@ func main() {
 	}
 	m.SetTenants(tokenStore.Tenants(), tokenStore.Count())
 
-	app := newApp(cfg, log, m, tokenStore)
+	app, err := newApp(cfg, log, m, tokenStore)
+	if err != nil {
+		log.Error("Invalid configuration", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()

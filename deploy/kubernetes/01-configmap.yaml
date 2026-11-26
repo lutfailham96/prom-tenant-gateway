@@ -11,7 +11,24 @@ data:
   RATE_LIMIT_MAX: "100"
   RATE_LIMIT_WINDOW: "10s"
   LOG_LEVEL: "info"
-  # Proxies whose X-Forwarded-For header is trusted for client IP / rate
-  # limiting. Narrow this to the ingress-nginx / Traefik pod CIDR. If empty,
-  # every request is keyed on the proxy IP and all clients share one bucket.
-  TRUSTED_PROXIES: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+  # Proxies (IPs/CIDRs) whose X-Forwarded-For header is trusted for the
+  # client IP used by the failed-auth rate limiter and request logs.
+  #
+  # NEVER list whole RFC1918 ranges: every pod in those ranges could then
+  # forge X-Forwarded-For and get a fresh rate-limit bucket per request.
+  #
+  # Default: loopback only (a mesh sidecar such as Envoy, if any). Behind
+  # ingress-nginx/Traefik, X-Forwarded-For is then ignored and clients are
+  # keyed on the proxy pod IP; valid tokens are never rate limited, so this
+  # is safe, but failures of all clients behind one proxy pod share a bucket.
+  #
+  # For per-client limiting, set it to the IPs/CIDR of the ingress pods only.
+  # Find them in the target cluster with e.g.
+  #   kubectl -n traefik get pods -o wide            # Traefik pod IPs
+  #   kubectl -n ingress-nginx get pods -o wide      # ingress-nginx pod IPs
+  #   kubectl get node <ingress-node> -o jsonpath='{.spec.podCIDR}'
+  # and prefer a narrow per-node podCIDR (e.g. "10.42.5.0/24") or a Calico
+  # IPPool dedicated to the ingress namespace over the cluster-wide pod CIDR.
+  # For hostNetwork ingress controllers use the ingress node IPs instead.
+  # Invalid entries make the gateway refuse to start.
+  TRUSTED_PROXIES: "127.0.0.1/32"

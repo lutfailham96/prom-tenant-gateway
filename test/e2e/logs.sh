@@ -39,7 +39,7 @@ main)
 limit)
   group "8b. logs gw-limit"
   eq "every line valid JSON" "$total" "$valid"
-  eq "rate_limited: 1 warn line per 429" 2 "$(q '.level=="warn" and .status==429 and .auth_result=="rate_limited"')"
+  eq "rate_limited: 1 warn line per 429" 3 "$(q '.level=="warn" and .status==429 and .auth_result=="rate_limited"')"
   eq "invalid_token warn lines" 6 "$(q '.level=="warn" and .auth_result=="invalid_token"')"
   eq "weak-token warning emitted" 1 "$(q '.message=="Token shorter than recommended length" and .tenant_id=="a"')"
   eq "weak token value never logged" 0 "$(grep -cF short-token-a $L)"
@@ -49,10 +49,10 @@ proxy)
   group "8c. logs gw-proxy (client IP resolution)"
   eq "untrusted peer logged as 172.30.0.20" 4 "$(q '.message=="HTTP request" and .ip=="172.30.0.20"')"
   eq "spoofed 1.1.1.x never logged as ip" 0 "$(q '.ip!=null and (.ip|startswith("1.1.1."))')"
-  eq "trusted XFF client 9.9.9.1 logged" 4 "$(q '.ip=="9.9.9.1"')"
+  eq "trusted XFF client 9.9.9.1 logged (incl. forged left-most XFF)" 5 "$(q '.ip=="9.9.9.1"')"
   eq "trusted XFF client 9.9.9.2 logged" 1 "$(q '.ip=="9.9.9.2"')"
   eq "no TRUSTED_PROXIES warning" 0 "$(q '(.message|startswith("TRUSTED_PROXIES not set"))')"
-  info "ip for invalid XFF from trusted proxy: $(jq -r 'select(.message=="HTTP request" and .ip!="9.9.9.1" and .ip!="9.9.9.2" and .ip!="172.30.0.20")|.ip' $L | sort | uniq -c | tr '\n' ' ')"
+  eq "proxy IP logged for no/invalid XFF from trusted proxy" 2 "$(q '.message=="HTTP request" and .ip=="172.30.0.10"')"
   ;;
 debug)
   group "7b. logs gw-debug (LOG_LEVEL=debug)"

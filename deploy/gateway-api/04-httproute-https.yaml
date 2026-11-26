@@ -1,6 +1,12 @@
-# HTTPRoute for HTTPS traffic - Replaces Ingress rules
-# Routes /api/v1/push to mimir-distributed-distributor-headless with ForwardAuth
-# Routes /prometheus to mimir-distributed-query-frontend with ForwardAuth
+# HTTPRoute for HTTPS traffic, attached to the shared Traefik Gateway
+# traefik/traefik-internal-gateway (owned by the platform, not this repo).
+#   /api/v1/push -> mimir-distributed-distributor-headless (write path)
+#   /prometheus  -> mimir-distributed-query-frontend       (read path)
+# Both rules authenticate through the ForwardAuth middleware, which returns
+# the tenant in X-Scope-OrgID.
+#
+# Attaching from namespace mimir requires the shared Gateway's listener to
+# allow routes from this namespace (spec.listeners[].allowedRoutes).
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -8,7 +14,9 @@ metadata:
   namespace: mimir
 spec:
   parentRefs:
-    - name: traefik-internal-gateway
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: traefik-internal-gateway
       namespace: traefik
       sectionName: https-metrics-v2-internal-obv
   hostnames:
@@ -20,16 +28,16 @@ spec:
             type: PathPrefix
             value: /api/v1/push
       filters:
+        # ExtensionRef is a LocalObjectReference: the Middleware must live in
+        # the route's namespace (mimir); it has no namespace field.
         - type: ExtensionRef
           extensionRef:
             group: traefik.io
             kind: Middleware
             name: prom-tenant-gateway-middleware
-            namespace: mimir
       backendRefs:
         - name: mimir-distributed-distributor-headless
           port: 8080
-          namespace: mimir
     # Query endpoint - read path
     - matches:
         - path:
@@ -41,8 +49,6 @@ spec:
             group: traefik.io
             kind: Middleware
             name: prom-tenant-gateway-middleware
-            namespace: mimir
       backendRefs:
         - name: mimir-distributed-query-frontend
           port: 8080
-          namespace: mimir
