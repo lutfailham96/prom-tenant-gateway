@@ -94,7 +94,7 @@ func startServer(t *testing.T, app *fiber.App) (string, <-chan error) {
 
 	base := "http://" + ln.Addr().String()
 	require.Eventually(t, func() bool {
-		resp, err := http.Get(base + "/healthz")
+		resp, err := testClient.Get(base + "/healthz")
 		if err != nil {
 			return false
 		}
@@ -113,7 +113,7 @@ func TestNewApp_BodyLimit(t *testing.T) {
 		req, err := http.NewRequest(http.MethodGet, base+"/validate-token", bytes.NewReader(make([]byte, size)))
 		require.NoError(t, err)
 		req.Header.Set("Authorization", "Bearer good-token")
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := testClient.Do(req)
 		require.NoError(t, err)
 		defer func() { _ = resp.Body.Close() }()
 		body, err := io.ReadAll(resp.Body)
@@ -241,7 +241,7 @@ func TestNewApp_GracefulShutdown(t *testing.T) {
 		t.Fatal("server did not stop after shutdown")
 	}
 
-	_, err := http.Get(base + "/healthz")
+	_, err := testClient.Get(base + "/healthz")
 	require.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "refused") || strings.Contains(err.Error(), "reset"), err.Error())
 }
