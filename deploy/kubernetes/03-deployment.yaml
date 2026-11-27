@@ -49,10 +49,15 @@ spec:
         - secretRef:
             name: prom-tenant-gateway-tokens
         env:
-        # Soft heap limit ~90% of limits.memory so the GC works harder before
-        # the container is OOM-killed. Keep in sync with resources.limits.memory.
-        - name: GOMEMLIMIT
-          value: "230MiB"
+        # Container memory limit in bytes, read from resources.limits.memory
+        # below (no value to keep in sync). The gateway sets the Go soft
+        # memory limit to 90% of it so the GC works harder before the
+        # container is OOM-killed. An explicit GOMEMLIMIT takes precedence.
+        - name: MEMORY_LIMIT_BYTES
+          valueFrom:
+            resourceFieldRef:
+              containerName: prom-tenant-gateway
+              resource: limits.memory
         lifecycle:
           preStop:
             # Keep serving while endpoints/ingress stop routing to this pod,

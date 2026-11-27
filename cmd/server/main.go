@@ -84,6 +84,16 @@ type runOptions struct {
 func run(ctx context.Context, opts runOptions) int {
 	cfg := config.Load()
 	log := logger.New(opts.stdout, serviceName, version, logger.ParseLevel(cfg.LogLevel))
+	limit, ok, err := memoryLimit(os.Getenv)
+	if err != nil {
+		log.Error("Invalid configuration", slog.String("error", err.Error()))
+		return 1
+	}
+	if ok {
+		debug.SetMemoryLimit(limit)
+		log.Info("Go memory limit set from MEMORY_LIMIT_BYTES", slog.Int64("bytes", limit))
+	}
+
 	m := metrics.New(version)
 	tokenStore := auth.NewTokenStore(log)
 

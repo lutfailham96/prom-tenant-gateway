@@ -87,7 +87,7 @@ func isolateEnv(t *testing.T, env map[string]string) {
 	t.Helper()
 	for _, key := range []string{
 		"PORT", "HTTP_PORT", "LOG_LEVEL", "RATE_LIMIT_ENABLED", "RATE_LIMIT_MAX",
-		"RATE_LIMIT_WINDOW", "TRUSTED_PROXIES", "VALID_TOKENS_JSON",
+		"RATE_LIMIT_WINDOW", "TRUSTED_PROXIES", "VALID_TOKENS_JSON", "MEMORY_LIMIT_BYTES",
 	} {
 		t.Setenv(key, "")
 	}
@@ -102,14 +102,18 @@ func isolateEnv(t *testing.T, env map[string]string) {
 }
 
 // listenRecorder records the address run asks for and serves on an
-// ephemeral loopback port instead.
+// ephemeral loopback port instead. It also reports when the server first
+// reads from a connection (see serverRead).
 type listenRecorder struct {
 	network, address string
 	ln               chan net.Listener
+
+	mu    sync.Mutex
+	reads map[string]chan struct{} // by client address
 }
 
 func newListenRecorder() *listenRecorder {
-	return &listenRecorder{ln: make(chan net.Listener, 1)}
+	return &listenRecorder{ln: make(chan net.Listener, 1), reads: map[string]chan struct{}{}}
 }
 
 func (r *listenRecorder) listen(network, address string) (net.Listener, error) {
@@ -118,8 +122,51 @@ func (r *listenRecorder) listen(network, address string) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	r.ln <- ln
-	return ln, nil
+	wrapped := &readNotifyListener{Listener: ln, rec: r}
+	r.ln <- wrapped
+	return wrapped, nil
+}
+
+// serverRead returns a channel closed once the server has read data from the
+// connection whose client side has address clientAddr. By then the server has
+// accepted the connection and counts it as open, so a Shutdown started
+// afterwards has to wait for it.
+func (r *listenRecorder) serverRead(clientAddr string) chan struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ch, ok := r.reads[clientAddr]
+	if !ok {
+		ch = make(chan struct{})
+		r.reads[clientAddr] = ch
+	}
+	return ch
+}
+
+type readNotifyListener struct {
+	net.Listener
+	rec *listenRecorder
+}
+
+func (l *readNotifyListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &readNotifyConn{Conn: c, read: l.rec.serverRead(c.RemoteAddr().String())}, nil
+}
+
+type readNotifyConn struct {
+	net.Conn
+	read chan struct{}
+	once sync.Once
+}
+
+func (c *readNotifyConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if n > 0 {
+		c.once.Do(func() { close(c.read) })
+	}
+	return n, err
 }
 
 // running is a run invocation in progress.
@@ -206,6 +253,7 @@ func TestRun_StartupValidation(t *testing.T) {
 		{"invalid TRUSTED_PROXIES", map[string]string{"TENANT_A_TOKEN": tokenA, "TRUSTED_PROXIES": "10.0.0.0/33"}, "Invalid configuration", "TRUSTED_PROXIES"},
 		{"negative RATE_LIMIT_MAX", map[string]string{"TENANT_A_TOKEN": tokenA, "RATE_LIMIT_MAX": "-1"}, "Invalid configuration", "must be positive"},
 		{"negative RATE_LIMIT_WINDOW", map[string]string{"TENANT_A_TOKEN": tokenA, "RATE_LIMIT_WINDOW": "-5s"}, "Invalid configuration", "must be positive"},
+		{"invalid MEMORY_LIMIT_BYTES", map[string]string{"TENANT_A_TOKEN": tokenA, "MEMORY_LIMIT_BYTES": "256Mi"}, "Invalid configuration", "MEMORY_LIMIT_BYTES"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -360,7 +408,14 @@ func TestRun_ShutdownTimeout(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 	_, err = io.WriteString(conn, "GET /validate-token HTTP/1.1\r\nHost: test\r\nContent-Length: 100\r\n\r\npartial")
 	require.NoError(t, err)
-	time.Sleep(100 * time.Millisecond) // let the server start reading it
+	// Shut down only once the server is reading the request: earlier, the
+	// connection may still sit unaccepted in the listen backlog and
+	// Shutdown would complete at once.
+	select {
+	case <-r.rec.serverRead(conn.LocalAddr().String()):
+	case <-time.After(5 * time.Second):
+		t.Fatal("server did not read the request")
+	}
 
 	start := time.Now()
 	r.cancel()
@@ -497,7 +552,8 @@ func mainProcess(t *testing.T, env ...string) *exec.Cmd {
 		key, _, _ := strings.Cut(kv, "=")
 		switch {
 		case strings.HasPrefix(key, "TENANT_"), key == "VALID_TOKENS_JSON", key == "PORT", key == "HTTP_PORT",
-			key == "TRUSTED_PROXIES", strings.HasPrefix(key, "RATE_LIMIT_"), key == "LOG_LEVEL", key == "GOCOVERDIR":
+			key == "TRUSTED_PROXIES", strings.HasPrefix(key, "RATE_LIMIT_"), key == "LOG_LEVEL", key == "GOCOVERDIR",
+			key == "MEMORY_LIMIT_BYTES":
 			continue
 		}
 		cmd.Env = append(cmd.Env, kv)

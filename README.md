@@ -101,6 +101,7 @@ at startup.
 | `RATE_LIMIT_MAX` | No | `100` | Failed auth attempts allowed per client IP per window (must be > 0; valid tokens are never counted or limited) |
 | `RATE_LIMIT_WINDOW` | No | `1m` | Rate limit window (Go duration, must be > 0) |
 | `TRUSTED_PROXIES` | No | — | Comma-separated proxy IPs/CIDRs whose `X-Forwarded-For` is trusted (e.g. the ingress pod IPs). Invalid entries fail startup. When empty, `X-Forwarded-For` is ignored and clients behind a proxy share one failure bucket |
+| `MEMORY_LIMIT_BYTES` | No | — | Container memory limit in bytes (Kubernetes Downward API `limits.memory`); the Go soft memory limit is set to 90% of it. Ignored when `GOMEMLIMIT` is set |
 
 *At least one token configuration method required.
 
