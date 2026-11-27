@@ -43,7 +43,7 @@ the pods: `kubectl -n mimir rollout restart deployment/prom-tenant-gateway`.
 | `00-namespace.yaml` | `mimir` namespace — **not** in kustomization (owned by Mimir); apply manually only if missing |
 | `01-configmap.yaml` | App config (rate limits, log level, etc.) |
 | `02-secret.example.yaml` | Token Secret example — **not** in kustomization; create the Secret out of band (see above) |
-| `03-deployment.yaml` | Probes, resources, security, preStop drain, `GOMEMLIMIT` (replicas managed by HPA) |
+| `03-deployment.yaml` | Probes, resources, security, preStop drain, Go memory limit from `limits.memory` via `MEMORY_LIMIT_BYTES` (replicas managed by HPA) |
 | `04-service.yaml` | ClusterIP service (port 80 → 8080) |
 | `05-hpa.yaml` | HPA: CPU 70%, 3-10 replicas |
 | `06-poddisruptionbudget.yaml` | Min 2 available during disruptions |

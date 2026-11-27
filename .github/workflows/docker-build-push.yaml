@@ -147,9 +147,13 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # PRs only verify the build: amd64 only, and they read the GHA
+          # cache but do not write to it (a mode=max export per PR would
+          # evict the main-branch layers). Pushes and releases build both
+          # platforms and refresh the cache.
           cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: ${{ github.event.inputs.platforms || 'linux/amd64,linux/arm64' }}
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,mode=max' || '' }}
+          platforms: ${{ github.event.inputs.platforms || (github.event_name == 'pull_request' && 'linux/amd64') || 'linux/amd64,linux/arm64' }}
           provenance: true
           sbom: true
 
